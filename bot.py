@@ -1,4 +1,12 @@
-"""Flight Finder Telegram bot entry point."""
+"""Flight Finder Telegram bot — entry point.
+
+Handler registration order matters (first-match routing):
+  1. ConversationHandler  — intercepts menu_search + conversation callbacks
+  2. History handlers     — hist_view_*, hist_rerun_*, menu_history
+  3. Favorites handlers   — menu_favorites, savefav_*, delfav_*
+  4. menu_main callback   — generic fallback for the "Back" button
+  5. /start command        — always available
+"""
 
 import asyncio
 import logging
@@ -7,11 +15,11 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from config import BOT_TOKEN, OWNER_ID
 from db import init_db
-from scheduler import scheduler_loop
 from handlers.favorites import get_favorites_handlers
 from handlers.history import get_history_handlers
 from handlers.search_flow import build_search_conversation
 from handlers.start import main_menu_callback, start_command
+from scheduler import scheduler_loop
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -25,31 +33,31 @@ async def post_init(application: Application) -> None:
     await init_db()
     logger.info("Database initialized.")
     asyncio.create_task(scheduler_loop(application.bot, OWNER_ID))
+    logger.info("Scheduler task created.")
 
 
 def main() -> None:
     """Build the Application, register handlers, and start polling."""
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # ── Commands ──────────────────────────────────────────────
-    app.add_handler(CommandHandler("start", start_command))
-
-    # ── Conversations ─────────────────────────────────────────
+    # ── 1. ConversationHandler (search flow) — FIRST for priority ──
     app.add_handler(build_search_conversation())
 
-    # ── Callback queries ──────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^menu_main$"))
-
-    # ── Favorites handlers ─────────────────────────────────────
-    for handler in get_favorites_handlers():
-        app.add_handler(handler)
-
-    # ── History handlers ──────────────────────────────────────
+    # ── 2. History callback handlers ───────────────────────────────
     for handler in get_history_handlers():
         app.add_handler(handler)
 
-    # ── Start ─────────────────────────────────────────────────
-    logger.info("Bot starting…")
+    # ── 3. Favorites callback handlers ─────────────────────────────
+    for handler in get_favorites_handlers():
+        app.add_handler(handler)
+
+    # ── 4. Main-menu fallback (Back button) ────────────────────────
+    app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^menu_main$"))
+
+    # ── 5. /start command — always available ───────────────────────
+    app.add_handler(CommandHandler("start", start_command))
+
+    logger.info("Bot starting...")
     app.run_polling()
 
 
