@@ -143,11 +143,19 @@ def routes_to_json(routes: list[Route]) -> str:
         {
             "date": r.date,
             "hub": r.hub,
+            "hub_name": r.hub_name,
             "dest": r.dest,
+            "dest_name": r.dest_name,
             "dom_price": r.dom_price,
+            "dom_discounted": round(r.dom_discounted, 2),
             "intl_price": r.intl_price,
             "total": round(r.total, 2),
-            "airlines": list(dict.fromkeys(r.dom_airlines + r.intl_airlines)),
+            "dom_airlines": r.dom_airlines,
+            "intl_airlines": r.intl_airlines,
+            "dom_stops": r.dom_stops,
+            "dom_dur": r.dom_dur,
+            "intl_stops": r.intl_stops,
+            "intl_dur": r.intl_dur,
         }
         for r in top
     ]
@@ -176,6 +184,7 @@ def format_results(
     if not routes:
         return "<b>No routes found.</b>"
 
+    disc_pct = int(DOMESTIC_DISCOUNT * 100)
     parts: list[str] = []
 
     # ── Header ───────────────────────────────────────────────────────────
@@ -188,11 +197,11 @@ def format_results(
 
     # ── Top 10 ───────────────────────────────────────────────────────────
     top_n = min(10, len(routes))
-    parts.append(f"\n<b>Top {top_n} cheapest routes:</b>")
+    lines = [f"<b>Top {top_n} cheapest routes:</b>"]
 
     for i, r in enumerate(routes[:top_n], 1):
-        tag = "85% disc." if r.hub in DISCOUNT_AIRPORTS else "no disc."
-        line = (
+        tag = f"{disc_pct}% disc." if r.hub in DISCOUNT_AIRPORTS else "no disc."
+        lines.append(
             f"\n<b>#{i}</b> <code>{r.total:,.0f} {currency}</code>\n"
             f"  {r.date} | {origin} -> {r.hub} ({r.hub_name}) -> {r.dest} ({r.dest_name})\n"
             f"  <i>Leg 1:</i> {r.dom_price} {currency} ({tag}) -> {r.dom_discounted:.0f} {currency}"
@@ -200,9 +209,9 @@ def format_results(
             f"  <i>Leg 2:</i> {r.intl_price} {currency}"
             f" | {', '.join(r.intl_airlines)} | {_stops_label(r.intl_stops)} | {fmt_dur(r.intl_dur)}"
         )
-        parts.append(line)
+    parts.append("\n".join(lines))
 
-    # ── Best per hub ─────────────────────────────────────────────────────
+    # ── Best per hub (routes are sorted by total; first per hub = best) ─
     seen_hubs: set[str] = set()
     hub_lines: list[str] = []
     for r in routes:
@@ -213,9 +222,9 @@ def format_results(
                 f" on {r.date} -> {r.dest}"
             )
     if hub_lines:
-        parts.append("\n<b>Best price per hub:</b>\n" + "\n".join(hub_lines))
+        parts.append("<b>Best price per hub:</b>\n" + "\n".join(hub_lines))
 
-    # ── Best per date ────────────────────────────────────────────────────
+    # ── Best per date (routes sorted by total; first per date = best) ──
     seen_dates: set[str] = set()
     date_lines: list[str] = []
     for r in routes:
@@ -226,7 +235,7 @@ def format_results(
                 f" via {r.hub} -> {r.dest}"
             )
     if date_lines:
-        parts.append("\n<b>Best price per date:</b>\n" + "\n".join(date_lines))
+        parts.append("<b>Best price per date:</b>\n" + "\n".join(date_lines))
 
     # ── Google Flights links (top 3) ─────────────────────────────────────
     link_n = min(3, len(routes))
@@ -239,12 +248,12 @@ def format_results(
             f"    <a href=\"{url1}\">Leg 1</a> | <a href=\"{url2}\">Leg 2</a>"
         )
     if link_lines:
-        parts.append("\n<b>Google Flights links:</b>\n" + "\n".join(link_lines))
+        parts.append("<b>Google Flights links:</b>\n" + "\n".join(link_lines))
 
     # ── Reminder ─────────────────────────────────────────────────────────
     parts.append(
-        "\n<i>Book legs separately to apply the 85% Canary Islands"
+        f"<i>Book legs separately to apply the {disc_pct}% Canary Islands"
         " resident discount on Spanish domestic flights.</i>"
     )
 
-    return "\n".join(parts)
+    return "\n\n".join(parts)
