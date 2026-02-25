@@ -1,6 +1,7 @@
 """SQLite database layer for flight_finder (async via aiosqlite)."""
 
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -63,11 +64,22 @@ def _json(obj: object) -> str:
 
 # ── Init ─────────────────────────────────────────────────────────────────────
 
+@asynccontextmanager
+async def _connect():
+    """Open a connection with pragmas (foreign keys, WAL) enabled."""
+    db = await aiosqlite.connect(DB_PATH)
+    await db.execute("PRAGMA foreign_keys = ON")
+    await db.execute("PRAGMA journal_mode = WAL")
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
 async def init_db() -> None:
     """Create tables if they don't exist."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.executescript(SCHEMA)
-        await db.execute("PRAGMA journal_mode=WAL")
         await db.commit()
 
 
@@ -85,7 +97,7 @@ async def save_search(
     results: object | None,
 ) -> int:
     """Insert a completed search and return its row id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cursor = await db.execute(
             """
             INSERT INTO searches
@@ -111,7 +123,7 @@ async def save_search(
 
 async def get_searches(limit: int = 10) -> list[dict]:
     """Return the last *limit* searches, newest first."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM searches ORDER BY id DESC LIMIT ?", (limit,)
@@ -122,7 +134,7 @@ async def get_searches(limit: int = 10) -> list[dict]:
 
 async def get_search_by_id(search_id: int) -> dict | None:
     """Return a single search by id, or None."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM searches WHERE id = ?", (search_id,)
@@ -144,7 +156,7 @@ async def add_favorite(
 ) -> int:
     """Add a route to favorites and return its row id."""
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cursor = await db.execute(
             """
             INSERT INTO favorites
@@ -171,7 +183,7 @@ async def add_favorite(
 
 async def get_favorites() -> list[dict]:
     """Return all favorites, newest first."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM favorites ORDER BY id DESC"
@@ -182,7 +194,7 @@ async def get_favorites() -> list[dict]:
 
 async def delete_favorite(fav_id: int) -> bool:
     """Delete a favorite by id. Returns True if a row was deleted."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cursor = await db.execute(
             "DELETE FROM favorites WHERE id = ?", (fav_id,)
         )
@@ -197,7 +209,7 @@ async def update_favorite_price(
 ) -> None:
     """Update last_price (and optionally record_price) for a favorite."""
     now = _now()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         if is_record:
             await db.execute(
                 """
@@ -231,7 +243,7 @@ async def add_price_check(
     route_detail: object | None,
 ) -> int:
     """Log a price-check event for a favorite and return its row id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cursor = await db.execute(
             """
             INSERT INTO price_checks (favorite_id, best_price, route_detail)
