@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from config import SOCS_COOKIE
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -234,8 +237,7 @@ async def fetch_html(from_apt, to_apt, date, adults=1, currency="EUR"):
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "curl failed (rc=%d) for %s->%s %s: %s",
             proc.returncode, from_apt, to_apt, date,
             stderr.decode("utf-8", errors="replace").strip(),

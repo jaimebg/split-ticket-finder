@@ -75,7 +75,7 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
 
                 # Apply domestic discount if hub is in DISCOUNT_AIRPORTS
                 if hub in DISCOUNT_AIRPORTS:
-                    dom_discounted = dom_price * DOMESTIC_DISCOUNT
+                    dom_discounted = dom_price * (1 - DOMESTIC_DISCOUNT)
                 else:
                     dom_discounted = float(dom_price)
 

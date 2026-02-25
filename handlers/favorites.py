@@ -22,7 +22,7 @@ def _parse_price(text: str) -> float | None:
     Expected format: "Best route: 123 EUR via MAD to NRT on 2026-03-15"
     or with thousand separators: "Best route: 1,234 EUR ..."
     """
-    match = re.search(r"Best route:\s*\*?\*?([0-9,.]+)", text)
+    match = re.search(r"Best route:\s*([0-9,.]+)", text)
     if match:
         try:
             return float(match.group(1).replace(",", ""))
