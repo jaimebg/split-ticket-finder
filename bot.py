@@ -1,11 +1,13 @@
 """Flight Finder Telegram bot entry point."""
 
+import asyncio
 import logging
 
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, OWNER_ID
 from db import init_db
+from scheduler import scheduler_loop
 from handlers.favorites import get_favorites_handlers
 from handlers.history import get_history_handlers
 from handlers.search_flow import build_search_conversation
@@ -22,6 +24,7 @@ async def post_init(application: Application) -> None:
     """Run once after the Application is initialized (before polling)."""
     await init_db()
     logger.info("Database initialized.")
+    asyncio.create_task(scheduler_loop(application.bot, OWNER_ID))
 
 
 def main() -> None:
