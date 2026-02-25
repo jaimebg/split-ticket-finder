@@ -153,7 +153,7 @@ async def range_end_input(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ],
     ])
     await update.message.reply_text(
-        "How often?",
+        "Sample a date every N days within the range:",
         reply_markup=keyboard,
     )
     return RANGE_EVERY
