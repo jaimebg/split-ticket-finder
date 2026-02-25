@@ -1,4 +1,12 @@
+"""Flight Finder Telegram bot entry point."""
+
 import logging
+
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+
+from config import BOT_TOKEN
+from db import init_db
+from handlers.start import main_menu_callback, start_command
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -7,8 +15,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main():
-    pass
+async def post_init(application: Application) -> None:
+    """Run once after the Application is initialized (before polling)."""
+    await init_db()
+    logger.info("Database initialized.")
+
+
+def main() -> None:
+    """Build the Application, register handlers, and start polling."""
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+
+    # ── Commands ──────────────────────────────────────────────
+    app.add_handler(CommandHandler("start", start_command))
+
+    # ── Callback queries ──────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^menu_main$"))
+
+    # ── Start ─────────────────────────────────────────────────
+    logger.info("Bot starting…")
+    app.run_polling()
 
 
 if __name__ == "__main__":
