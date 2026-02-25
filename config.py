@@ -40,4 +40,5 @@ SOCS_COOKIE = os.getenv(
 DEFAULT_DELAY = float(os.getenv("DEFAULT_DELAY", "2.5"))
 
 # ── Alert config ─────────────────────────────────────────
-ALERT_INTERVAL_MINUTES = int(os.getenv("ALERT_INTERVAL_MINUTES", "60"))
+ALERT_INTERVAL_HOURS = int(os.getenv("ALERT_INTERVAL_HOURS", "6"))
+PRICE_DROP_THRESHOLD = float(os.getenv("PRICE_DROP_THRESHOLD", "0.10"))

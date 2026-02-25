@@ -232,7 +232,15 @@ async def fetch_html(from_apt, to_apt, date, adults=1, currency="EUR"):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, _ = await proc.communicate()
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        import logging
+        logging.getLogger(__name__).warning(
+            "curl failed (rc=%d) for %s->%s %s: %s",
+            proc.returncode, from_apt, to_apt, date,
+            stderr.decode("utf-8", errors="replace").strip(),
+        )
+        return ""
     return stdout.decode("utf-8", errors="replace")
 
 
