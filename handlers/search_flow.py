@@ -1,5 +1,6 @@
 """Guided search conversation handler — walks the user through building a search."""
 
+import json
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -429,8 +430,8 @@ async def _run_search_task(bot, chat_id: int, user_data: dict) -> None:
                 disable_web_page_preview=True,
             )
 
-        # 4. Save to DB
-        results_json = routes_to_json(routes)
+        # 4. Save to DB (pass parsed list, save_search handles JSON encoding)
+        results_data = json.loads(routes_to_json(routes)) if routes else None
         best_price = routes[0].total if routes else None
         best_route = (
             f"{origin}->{routes[0].hub}->{routes[0].dest} {routes[0].date}"
@@ -445,7 +446,7 @@ async def _run_search_task(bot, chat_id: int, user_data: dict) -> None:
             currency=currency,
             best_price=best_price,
             best_route=best_route,
-            results=results_json,
+            results=results_data,
         )
 
         # 5. Offer to save best as favorite
