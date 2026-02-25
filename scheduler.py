@@ -1,4 +1,5 @@
 """Background scheduler that periodically checks favorite routes for price drops."""
+from __future__ import annotations
 
 import asyncio
 import json

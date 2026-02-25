@@ -1,4 +1,5 @@
 """Async search orchestrator — ties scraper + config into a multi-phase search."""
+from __future__ import annotations
 
 import asyncio
 import json

@@ -1,4 +1,5 @@
 """Favorites management handlers — save, list, and delete favorite routes."""
+from __future__ import annotations
 
 import json
 import logging

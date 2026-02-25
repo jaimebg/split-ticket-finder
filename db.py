@@ -1,4 +1,5 @@
 """SQLite database layer for flight_finder (async via aiosqlite)."""
+from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager

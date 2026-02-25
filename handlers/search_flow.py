@@ -1,4 +1,5 @@
 """Guided search conversation handler — walks the user through building a search."""
+from __future__ import annotations
 
 import json
 import logging
