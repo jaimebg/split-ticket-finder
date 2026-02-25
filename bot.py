@@ -6,6 +6,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from config import BOT_TOKEN
 from db import init_db
+from handlers.search_flow import build_search_conversation
 from handlers.start import main_menu_callback, start_command
 
 logging.basicConfig(
@@ -27,6 +28,9 @@ def main() -> None:
 
     # ── Commands ──────────────────────────────────────────────
     app.add_handler(CommandHandler("start", start_command))
+
+    # ── Conversations ─────────────────────────────────────────
+    app.add_handler(build_search_conversation())
 
     # ── Callback queries ──────────────────────────────────────
     app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^menu_main$"))
