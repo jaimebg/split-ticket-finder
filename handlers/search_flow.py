@@ -23,7 +23,8 @@ from search import format_results, routes_to_json, run_search
 logger = logging.getLogger(__name__)
 
 # ── Conversation states ──────────────────────────────────────────────────────
-DEST, DATE_MODE, FIXED_DATES, RANGE_START, RANGE_END, RANGE_EVERY, HUBS, CUSTOM_HUBS, CONFIRM = range(9)
+(DEST, TRIP_TYPE, TRIP_DAYS, DATE_MODE, FIXED_DATES,
+ RANGE_START, RANGE_END, RANGE_EVERY, HUBS, CUSTOM_HUBS, CONFIRM) = range(11)
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ async def entry_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data["destinations"] = {}
     context.user_data["dates"] = []
     context.user_data["hubs"] = {}
+    context.user_data["trip_days"] = 0
 
     await query.edit_message_text(
         "Where do you want to fly?\n"
@@ -67,13 +69,131 @@ async def dest_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     keyboard = InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("One-way", callback_data="trip_oneway"),
+            InlineKeyboardButton("Round-trip", callback_data="trip_roundtrip"),
+        ],
+    ])
+    await update.message.reply_text(
+        f"Destinations: <b>{', '.join(codes)}</b>\n\n"
+        "One-way or round-trip?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+    return TRIP_TYPE
+
+
+# ── TRIP_TYPE state ──────────────────────────────────────────────────────────
+
+@owner_only_callback
+async def trip_oneway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User chose one-way."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data["trip_days"] = 0
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
+            InlineKeyboardButton("Date range", callback_data="datemode_range"),
+        ],
+    ])
+    await query.edit_message_text(
+        "One-way selected.\n\n"
+        "How do you want to specify <b>departure</b> dates?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+    return DATE_MODE
+
+
+@owner_only_callback
+async def trip_roundtrip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User chose round-trip — ask trip duration."""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("7 days", callback_data="tripdays_7"),
+            InlineKeyboardButton("10 days", callback_data="tripdays_10"),
+        ],
+        [
+            InlineKeyboardButton("14 days", callback_data="tripdays_14"),
+            InlineKeyboardButton("21 days", callback_data="tripdays_21"),
+        ],
+        [
+            InlineKeyboardButton("Custom", callback_data="tripdays_custom"),
+        ],
+    ])
+    await query.edit_message_text(
+        "Round-trip selected.\n\n"
+        "How long is the trip?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+    return TRIP_DAYS
+
+
+# ── TRIP_DAYS state ─────────────────────────────────────────────────────────
+
+@owner_only_callback
+async def tripdays_preset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User picked a preset trip duration."""
+    query = update.callback_query
+    await query.answer()
+    days = int(query.data.split("_")[1])
+    context.user_data["trip_days"] = days
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
+            InlineKeyboardButton("Date range", callback_data="datemode_range"),
+        ],
+    ])
+    await query.edit_message_text(
+        f"Round-trip, <b>{days} days</b>.\n\n"
+        "How do you want to specify <b>departure</b> dates?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+    return DATE_MODE
+
+
+@owner_only_callback
+async def tripdays_custom_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User wants to type a custom trip duration."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "Send the trip duration in days (e.g. <code>12</code>).",
+        parse_mode="HTML",
+    )
+    return TRIP_DAYS
+
+
+@owner_only
+async def tripdays_custom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User typed a custom number of days."""
+    raw = update.message.text.strip()
+    try:
+        days = int(raw)
+        if days < 1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("Please send a positive number (e.g. 12).")
+        return TRIP_DAYS
+
+    context.user_data["trip_days"] = days
+
+    keyboard = InlineKeyboardMarkup([
+        [
             InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
             InlineKeyboardButton("Date range", callback_data="datemode_range"),
         ],
     ])
     await update.message.reply_text(
-        f"Destinations: <b>{', '.join(codes)}</b>\n\n"
-        "How do you want to specify dates?",
+        f"Round-trip, <b>{days} days</b>.\n\n"
+        "How do you want to specify <b>departure</b> dates?",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -292,12 +412,15 @@ async def _show_confirm(query, context: ContextTypes.DEFAULT_TYPE) -> int:
     dests = ud["destinations"]
     dates = ud["dates"]
     hubs = ud["hubs"]
+    trip_days = ud.get("trip_days", 0)
+    trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
     n_queries = len(hubs) * len(dates) + len(hubs) * len(dests) * len(dates)
 
     summary = (
         "<b>Search summary</b>\n\n"
         f"Origin: <code>{origin}</code>\n"
         f"Destinations: <code>{', '.join(dests.keys())}</code>\n"
+        f"Trip: <b>{trip_label}</b>\n"
         f"Dates: <b>{len(dates)}</b> ({dates[0]} to {dates[-1]})\n"
         f"Hubs: <code>{', '.join(hubs.keys())}</code>\n"
         f"~<b>{n_queries}</b> queries\n\n"
@@ -320,12 +443,15 @@ async def _show_confirm_from_message(update: Update, context: ContextTypes.DEFAU
     dests = ud["destinations"]
     dates = ud["dates"]
     hubs = ud["hubs"]
+    trip_days = ud.get("trip_days", 0)
+    trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
     n_queries = len(hubs) * len(dates) + len(hubs) * len(dests) * len(dates)
 
     summary = (
         "<b>Search summary</b>\n\n"
         f"Origin: <code>{origin}</code>\n"
         f"Destinations: <code>{', '.join(dests.keys())}</code>\n"
+        f"Trip: <b>{trip_label}</b>\n"
         f"Dates: <b>{len(dates)}</b> ({dates[0]} to {dates[-1]})\n"
         f"Hubs: <code>{', '.join(hubs.keys())}</code>\n"
         f"~<b>{n_queries}</b> queries\n\n"
@@ -407,6 +533,7 @@ async def _run_search_task(bot, chat_id: int, user_data: dict) -> None:
         hubs = user_data["hubs"]
         adults = user_data["adults"]
         currency = user_data["currency"]
+        trip_days = user_data.get("trip_days", 0)
 
         # 1. Run the search
         routes = await run_search(
@@ -416,6 +543,7 @@ async def _run_search_task(bot, chat_id: int, user_data: dict) -> None:
             hubs=hubs,
             adults=adults,
             currency=currency,
+            trip_days=trip_days,
         )
 
         # 2. Format results
@@ -501,6 +629,15 @@ def build_search_conversation() -> ConversationHandler:
         states={
             DEST: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, dest_input),
+            ],
+            TRIP_TYPE: [
+                CallbackQueryHandler(trip_oneway, pattern="^trip_oneway$"),
+                CallbackQueryHandler(trip_roundtrip, pattern="^trip_roundtrip$"),
+            ],
+            TRIP_DAYS: [
+                CallbackQueryHandler(tripdays_preset, pattern=r"^tripdays_\d+$"),
+                CallbackQueryHandler(tripdays_custom_prompt, pattern="^tripdays_custom$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tripdays_custom_input),
             ],
             DATE_MODE: [
                 CallbackQueryHandler(datemode_fixed, pattern="^datemode_fixed$"),

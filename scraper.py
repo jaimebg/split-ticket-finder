@@ -43,15 +43,25 @@ def _var(fn, val):
     return _field(fn, 0, _varint(val))
 
 
-def encode_tfs(from_apt, to_apt, date, adults=1):
+def encode_tfs(from_apt, to_apt, date, adults=1, return_date=None):
     apt_from = _var(1, 1) + _str(2, from_apt)
     apt_to = _var(1, 1) + _str(2, to_apt)
     flt = _str(2, date) + _bytes(13, apt_from) + _bytes(14, apt_to)
 
     msg = bytearray()
     msg += _var(1, 28)
-    msg += _var(2, 2)                         # one-way
+    if return_date:
+        msg += _var(2, 1)                     # round-trip
+    else:
+        msg += _var(2, 2)                     # one-way
     msg += _bytes(3, bytes(flt))
+
+    if return_date:
+        apt_from_ret = _var(1, 1) + _str(2, to_apt)
+        apt_to_ret = _var(1, 1) + _str(2, from_apt)
+        flt_ret = _str(2, return_date) + _bytes(13, apt_from_ret) + _bytes(14, apt_to_ret)
+        msg += _bytes(3, bytes(flt_ret))
+
     msg += _var(3, 1)
     msg += _var(8, 1)                         # economy
     msg += _var(9, 1)
@@ -64,8 +74,8 @@ def encode_tfs(from_apt, to_apt, date, adults=1):
     return base64.b64encode(bytes(msg)).decode("utf-8").rstrip("=")
 
 
-def build_url(from_apt, to_apt, date, adults=1, currency="EUR"):
-    tfs = encode_tfs(from_apt, to_apt, date, adults)
+def build_url(from_apt, to_apt, date, adults=1, currency="EUR", return_date=None):
+    tfs = encode_tfs(from_apt, to_apt, date, adults, return_date=return_date)
     return f"https://www.google.com/travel/flights/search?tfs={tfs}&hl=es&curr={currency}"
 
 
@@ -100,6 +110,7 @@ class Route:
     dom_discounted: float
     intl_price: int
     total: float
+    return_date: str = ""
     dom_airlines: list[str] = field(default_factory=list)
     dom_stops: int = 0
     dom_dur: int = 0
@@ -220,9 +231,9 @@ def parse_flights(html):
 # Async scraper
 # ============================================================
 
-async def fetch_html(from_apt, to_apt, date, adults=1, currency="EUR"):
+async def fetch_html(from_apt, to_apt, date, adults=1, currency="EUR", return_date=None):
     """Fetch Google Flights HTML using curl as an async subprocess."""
-    url = build_url(from_apt, to_apt, date, adults, currency)
+    url = build_url(from_apt, to_apt, date, adults, currency, return_date=return_date)
     proc = await asyncio.create_subprocess_exec(
         "curl", "-s", "--compressed",
         "-H", "accept: text/html,application/xhtml+xml,application/xml;q=0.9",
@@ -248,7 +259,7 @@ async def fetch_html(from_apt, to_apt, date, adults=1, currency="EUR"):
     return stdout.decode("utf-8", errors="replace")
 
 
-async def search(from_apt, to_apt, date, adults=1, currency="EUR"):
+async def search(from_apt, to_apt, date, adults=1, currency="EUR", return_date=None):
     """Search flights and return parsed results."""
-    html = await fetch_html(from_apt, to_apt, date, adults, currency)
+    html = await fetch_html(from_apt, to_apt, date, adults, currency, return_date=return_date)
     return parse_flights(html)

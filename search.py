@@ -4,11 +4,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta
 
 from config import DISCOUNT_AIRPORTS, DOMESTIC_DISCOUNT, DEFAULT_DELAY
 from scraper import FlightResult, Route, build_url, fmt_dur, search
 
 logger = logging.getLogger(__name__)
+
+
+def _return_date(date: str, trip_days: int) -> str:
+    """Compute return date as date + trip_days."""
+    dt = datetime.strptime(date, "%Y-%m-%d") + timedelta(days=trip_days)
+    return dt.strftime("%Y-%m-%d")
 
 
 # ── Phase 1-2-3 search ──────────────────────────────────────────────────────
@@ -21,6 +28,7 @@ async def run_search(
     adults: int = 1,
     currency: str = "EUR",
     delay: float = DEFAULT_DELAY,
+    trip_days: int = 0,
 ) -> list[Route]:
     """Run the full 3-phase search and return routes sorted by total price.
 
@@ -33,22 +41,27 @@ async def run_search(
     adults : int          – Number of adult passengers.
     currency : str        – Currency code for prices.
     delay : float         – Seconds to sleep between HTTP requests.
+    trip_days : int       – Trip duration in days (0 = one-way).
 
     Returns
     -------
     list[Route] sorted by ascending total price.
     """
+    roundtrip = trip_days > 0
+    label = f"round-trip ({trip_days}d)" if roundtrip else "one-way"
 
     # ── Phase 1: Domestic (origin -> hubs) ───────────────────────────────
-    logger.info("Phase 1: searching %s -> %d hubs x %d dates",
-                origin, len(hubs), len(dates))
+    logger.info("Phase 1 [%s]: searching %s -> %d hubs x %d dates",
+                label, origin, len(hubs), len(dates))
 
     dom_cache: dict[tuple[str, str], list[FlightResult]] = {}
 
     for hub in hubs:
         for date in dates:
+            ret = _return_date(date, trip_days) if roundtrip else None
             try:
-                flights = await search(origin, hub, date, adults, currency)
+                flights = await search(origin, hub, date, adults, currency,
+                                       return_date=ret)
             except Exception:
                 logger.exception("Phase 1 error: %s->%s %s", origin, hub, date)
                 flights = []
@@ -69,8 +82,8 @@ async def run_search(
                 len(dom_cache), len(hubs_found))
 
     # ── Phase 2: International (hub -> destinations) ─────────────────────
-    logger.info("Phase 2: searching %d hubs -> %d destinations x %d dates",
-                len(hubs_found), len(destinations), len(dates))
+    logger.info("Phase 2 [%s]: searching %d hubs -> %d destinations x %d dates",
+                label, len(hubs_found), len(destinations), len(dates))
 
     intl_cache: dict[tuple[str, str, str], list[FlightResult]] = {}
 
@@ -79,8 +92,10 @@ async def run_search(
             for date in dates:
                 if (hub, date) not in dom_cache:
                     continue
+                ret = _return_date(date, trip_days) if roundtrip else None
                 try:
-                    flights = await search(hub, dest, date, adults, currency)
+                    flights = await search(hub, dest, date, adults, currency,
+                                           return_date=ret)
                 except Exception:
                     logger.exception("Phase 2 error: %s->%s %s", hub, dest, date)
                     flights = []
@@ -110,6 +125,7 @@ async def run_search(
             is_discounted = hub in DISCOUNT_AIRPORTS
             discount = DOMESTIC_DISCOUNT if is_discounted else 0
             dom_discounted = dom.price * (1 - discount)
+            ret = _return_date(date, trip_days) if roundtrip else ""
 
             for intl in intls[:2]:
                 routes.append(Route(
@@ -122,6 +138,7 @@ async def run_search(
                     dom_discounted=dom_discounted,
                     intl_price=intl.price,
                     total=dom_discounted + intl.price,
+                    return_date=ret,
                     dom_airlines=dom.airlines,
                     dom_stops=dom.stops,
                     dom_dur=dom.duration,
@@ -143,6 +160,7 @@ def routes_to_json(routes: list[Route]) -> str:
     data = [
         {
             "date": r.date,
+            "return_date": r.return_date,
             "hub": r.hub,
             "hub_name": r.hub_name,
             "dest": r.dest,
@@ -186,14 +204,19 @@ def format_results(
         return "<b>No routes found.</b>"
 
     disc_pct = int(DOMESTIC_DISCOUNT * 100)
+    roundtrip = bool(routes[0].return_date)
+    trip_label = "Round-trip" if roundtrip else "One-way"
     parts: list[str] = []
 
     # ── Header ───────────────────────────────────────────────────────────
     best = routes[0]
+    date_info = best.date
+    if roundtrip:
+        date_info = f"{best.date} — {best.return_date}"
     parts.append(
-        f"<b>Found {len(routes)} routes</b>\n"
+        f"<b>{trip_label} · Found {len(routes)} routes</b>\n"
         f"Best: <b>{best.total:,.0f} {currency}</b> "
-        f"({origin}->{best.hub}->{best.dest} on {best.date})"
+        f"({origin}->{best.hub}->{best.dest} on {date_info})"
     )
 
     # ── Top 10 ───────────────────────────────────────────────────────────
@@ -202,9 +225,11 @@ def format_results(
 
     for i, r in enumerate(routes[:top_n], 1):
         tag = f"{disc_pct}% disc." if r.hub in DISCOUNT_AIRPORTS else "no disc."
+        date_str = f"{r.date} — {r.return_date}" if r.return_date else r.date
+        price_note = " (round-trip)" if r.return_date else ""
         lines.append(
-            f"\n<b>#{i}</b> <code>{r.total:,.0f} {currency}</code>\n"
-            f"  {r.date} | {origin} -> {r.hub} ({r.hub_name}) -> {r.dest} ({r.dest_name})\n"
+            f"\n<b>#{i}</b> <code>{r.total:,.0f} {currency}</code>{price_note}\n"
+            f"  {date_str} | {origin} -> {r.hub} ({r.hub_name}) -> {r.dest} ({r.dest_name})\n"
             f"  <i>Leg 1:</i> {r.dom_price} {currency} ({tag}) -> {r.dom_discounted:.0f} {currency}"
             f" | {', '.join(r.dom_airlines)} | {_stops_label(r.dom_stops)} | {fmt_dur(r.dom_dur)}\n"
             f"  <i>Leg 2:</i> {r.intl_price} {currency}"
@@ -242,10 +267,12 @@ def format_results(
     link_n = min(3, len(routes))
     link_lines: list[str] = []
     for i, r in enumerate(routes[:link_n], 1):
-        url1 = build_url(origin, r.hub, r.date, currency=currency)
-        url2 = build_url(r.hub, r.dest, r.date, currency=currency)
+        ret = r.return_date or None
+        url1 = build_url(origin, r.hub, r.date, currency=currency, return_date=ret)
+        url2 = build_url(r.hub, r.dest, r.date, currency=currency, return_date=ret)
+        date_str = f"{r.date} — {r.return_date}" if r.return_date else r.date
         link_lines.append(
-            f"  #{i} {origin}->{r.hub}->{r.dest} {r.date}\n"
+            f"  #{i} {origin}->{r.hub}->{r.dest} {date_str}\n"
             f"    <a href=\"{url1}\">Leg 1</a> | <a href=\"{url2}\">Leg 2</a>"
         )
     if link_lines:
