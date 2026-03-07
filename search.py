@@ -50,7 +50,7 @@ async def run_search(
     roundtrip = trip_days > 0
     label = f"round-trip ({trip_days}d)" if roundtrip else "one-way"
 
-    # ── Phase 1: Domestic (origin -> hubs) ───────────────────────────────
+    # ── Phase 1: Domestic outbound (origin -> hubs) ────────────────────────
     logger.info("Phase 1 [%s]: searching %s -> %d hubs x %d dates",
                 label, origin, len(hubs), len(dates))
 
@@ -58,10 +58,8 @@ async def run_search(
 
     for hub in hubs:
         for date in dates:
-            ret = _return_date(date, trip_days) if roundtrip else None
             try:
-                flights = await search(origin, hub, date, adults, currency,
-                                       return_date=ret)
+                flights = await search(origin, hub, date, adults, currency)
             except Exception:
                 logger.exception("Phase 1 error: %s->%s %s", origin, hub, date)
                 flights = []
@@ -81,7 +79,37 @@ async def run_search(
     logger.info("Phase 1 done: %d hub/date combos, %d hubs with flights",
                 len(dom_cache), len(hubs_found))
 
-    # ── Phase 2: International (hub -> destinations) ─────────────────────
+    # ── Phase 1R: Domestic return (hubs -> origin) ───────────────────────
+    dom_ret_cache: dict[tuple[str, str], list[FlightResult]] = {}
+
+    if roundtrip:
+        logger.info("Phase 1R: searching %d hubs -> %s (return legs)",
+                    len(hubs_found), origin)
+        for hub in hubs_found:
+            for date in dates:
+                if (hub, date) not in dom_cache:
+                    continue
+                ret_date = _return_date(date, trip_days)
+                try:
+                    flights = await search(hub, origin, ret_date, adults, currency)
+                except Exception:
+                    logger.exception("Phase 1R error: %s->%s %s", hub, origin, ret_date)
+                    flights = []
+
+                if flights:
+                    dom_ret_cache[(hub, date)] = flights[:3]
+                    best = flights[0]
+                    logger.info("  %s->%s %s: %d flights, best %d %s",
+                                hub, origin, ret_date, len(flights),
+                                best.price, currency)
+                else:
+                    logger.info("  %s->%s %s: no flights", hub, origin, ret_date)
+
+                await asyncio.sleep(delay)
+
+        logger.info("Phase 1R done: %d return domestic combos", len(dom_ret_cache))
+
+    # ── Phase 2: International outbound (hub -> destinations) ────────────
     logger.info("Phase 2 [%s]: searching %d hubs -> %d destinations x %d dates",
                 label, len(hubs_found), len(destinations), len(dates))
 
@@ -92,10 +120,8 @@ async def run_search(
             for date in dates:
                 if (hub, date) not in dom_cache:
                     continue
-                ret = _return_date(date, trip_days) if roundtrip else None
                 try:
-                    flights = await search(hub, dest, date, adults, currency,
-                                           return_date=ret)
+                    flights = await search(hub, dest, date, adults, currency)
                 except Exception:
                     logger.exception("Phase 2 error: %s->%s %s", hub, dest, date)
                     flights = []
@@ -113,7 +139,38 @@ async def run_search(
 
     logger.info("Phase 2 done: %d international combos", len(intl_cache))
 
-    # ── Phase 3: Combine ─────────────────────────────────────────────────
+    # ── Phase 2R: International return (destinations -> hub) ─────────────
+    intl_ret_cache: dict[tuple[str, str, str], list[FlightResult]] = {}
+
+    if roundtrip:
+        logger.info("Phase 2R: searching %d destinations -> %d hubs (return legs)",
+                    len(destinations), len(hubs_found))
+        for hub in hubs_found:
+            for dest in destinations:
+                for date in dates:
+                    if (hub, dest, date) not in intl_cache:
+                        continue
+                    ret_date = _return_date(date, trip_days)
+                    try:
+                        flights = await search(dest, hub, ret_date, adults, currency)
+                    except Exception:
+                        logger.exception("Phase 2R error: %s->%s %s", dest, hub, ret_date)
+                        flights = []
+
+                    if flights:
+                        intl_ret_cache[(hub, dest, date)] = flights[:3]
+                        best = flights[0]
+                        logger.info("  %s->%s %s: %d flights, best %d %s",
+                                    dest, hub, ret_date, len(flights),
+                                    best.price, currency)
+                    else:
+                        logger.info("  %s->%s %s: no flights", dest, hub, ret_date)
+
+                    await asyncio.sleep(delay)
+
+        logger.info("Phase 2R done: %d return international combos", len(intl_ret_cache))
+
+    # ── Combine ──────────────────────────────────────────────────────────
     routes: list[Route] = []
 
     for (hub, date), doms in dom_cache.items():
@@ -121,34 +178,51 @@ async def run_search(
             intls = intl_cache.get((hub, dest, date))
             if not intls:
                 continue
-            dom = doms[0]
+
+            dom_out = doms[0]
             is_discounted = hub in DISCOUNT_AIRPORTS
             discount = DOMESTIC_DISCOUNT if is_discounted else 0
-            dom_discounted = dom.price * (1 - discount)
-            ret = _return_date(date, trip_days) if roundtrip else ""
 
-            for intl in intls[:2]:
+            if roundtrip:
+                dom_rets = dom_ret_cache.get((hub, date))
+                intl_rets = intl_ret_cache.get((hub, dest, date))
+                if not dom_rets or not intl_rets:
+                    continue
+                dom_price = dom_out.price + dom_rets[0].price
+                ret = _return_date(date, trip_days)
+            else:
+                dom_price = dom_out.price
+                ret = ""
+
+            dom_discounted = dom_price * (1 - discount)
+
+            for intl_out in intls[:2]:
+                if roundtrip:
+                    intl_price = intl_out.price + intl_rets[0].price
+                else:
+                    intl_price = intl_out.price
+
                 routes.append(Route(
                     date=date,
                     hub=hub,
                     hub_name=hubs.get(hub, hub),
                     dest=dest,
                     dest_name=dest_name,
-                    dom_price=dom.price,
+                    dom_price=dom_price,
                     dom_discounted=dom_discounted,
-                    intl_price=intl.price,
-                    total=dom_discounted + intl.price,
+                    intl_price=intl_price,
+                    total=dom_discounted + intl_price,
                     return_date=ret,
-                    dom_airlines=dom.airlines,
-                    dom_stops=dom.stops,
-                    dom_dur=dom.duration,
-                    intl_airlines=intl.airlines,
-                    intl_stops=intl.stops,
-                    intl_dur=intl.duration,
+                    dom_airlines=dom_out.airlines,
+                    dom_stops=dom_out.stops,
+                    dom_dur=dom_out.duration,
+                    intl_airlines=intl_out.airlines,
+                    intl_stops=intl_out.stops,
+                    intl_dur=intl_out.duration,
                 ))
 
     routes.sort(key=lambda r: r.total)
-    logger.info("Phase 3 done: %d combined routes", len(routes))
+    logger.info("Combine done: %d routes", len(routes))
     return routes
 
 

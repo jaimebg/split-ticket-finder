@@ -415,6 +415,8 @@ async def _show_confirm(query, context: ContextTypes.DEFAULT_TYPE) -> int:
     trip_days = ud.get("trip_days", 0)
     trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
     n_queries = len(hubs) * len(dates) + len(hubs) * len(dests) * len(dates)
+    if trip_days:
+        n_queries *= 2  # return legs double the queries
 
     summary = (
         "<b>Search summary</b>\n\n"
@@ -446,6 +448,8 @@ async def _show_confirm_from_message(update: Update, context: ContextTypes.DEFAU
     trip_days = ud.get("trip_days", 0)
     trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
     n_queries = len(hubs) * len(dates) + len(hubs) * len(dests) * len(dates)
+    if trip_days:
+        n_queries *= 2
 
     summary = (
         "<b>Search summary</b>\n\n"
