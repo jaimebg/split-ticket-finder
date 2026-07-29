@@ -1,0 +1,55 @@
+[project]
+name = "split-ticket-finder"
+version = "1.0.0"
+description = "Telegram bot that finds split-ticket itineraries cheaper than the airline through-fare by routing through a discounted hub"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jaime Barreto" }]
+keywords = ["telegram-bot", "flights", "asyncio", "scraping", "split-ticketing"]
+
+dependencies = [
+    "python-telegram-bot[ext]>=21.0",
+    "aiosqlite>=0.20.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # function calls in argument defaults (used for config defaults)
+    "RUF001", # en dashes and box-drawing characters are used deliberately
+    "RUF002", # ...in docstrings
+    "RUF003", # ...and in section-header comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # sys.path juggling before imports
