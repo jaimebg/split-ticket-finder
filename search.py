@@ -4,21 +4,95 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
 
-from config import DISCOUNT_AIRPORTS, DOMESTIC_DISCOUNT, DEFAULT_DELAY
-from scraper import FlightResult, Route, build_url, fmt_dur, search
+from config import (
+    DEFAULT_DELAY,
+    DISCOUNT_AIRPORTS,
+    DOMESTIC_DISCOUNT,
+    MAX_CONCURRENCY,
+)
+from scraper import (
+    FetchError,
+    FlightResult,
+    ParseError,
+    Route,
+    add_days,
+    build_client,
+    build_url,
+    fmt_dur,
+    search,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def _return_date(date: str, trip_days: int) -> str:
-    """Compute return date as date + trip_days."""
-    dt = datetime.strptime(date, "%Y-%m-%d") + timedelta(days=trip_days)
-    return dt.strftime("%Y-%m-%d")
+# A leg is one origin->destination query on one date.
+Leg = tuple[str, str, str]
 
 
-# ── Phase 1-2-3 search ──────────────────────────────────────────────────────
+class _LegFetcher:
+    """Runs many leg queries with bounded concurrency and a per-worker delay.
+
+    A search issues hundreds of requests. Running them one at a time (the
+    original design) took tens of minutes; running them all at once would get
+    the scraper blocked. This caps in-flight requests at MAX_CONCURRENCY and
+    still spaces out each worker's requests by DEFAULT_DELAY, so throughput
+    scales with the cap while the request rate stays predictable.
+    """
+
+    def __init__(self, client, *, delay: float, concurrency: int):
+        self._client = client
+        self._delay = delay
+        self._concurrency = concurrency
+        self._semaphore = asyncio.Semaphore(concurrency)
+        self.parse_errors = 0
+        self.fetch_errors = 0
+
+    async def _one(self, from_apt, to_apt, date, adults, currency):
+        async with self._semaphore:
+            try:
+                flights = await search(
+                    from_apt, to_apt, date, adults, currency, client=self._client
+                )
+            except ParseError as exc:
+                # Layout change, consent wall or rate limiting — not "no flights".
+                self.parse_errors += 1
+                logger.warning("Parse failed for %s->%s %s: %s", from_apt, to_apt, date, exc)
+                return []
+            except FetchError as exc:
+                self.fetch_errors += 1
+                logger.warning("Fetch failed for %s->%s %s: %s", from_apt, to_apt, date, exc)
+                return []
+            except Exception:
+                self.fetch_errors += 1
+                logger.exception("Unexpected error for %s->%s %s", from_apt, to_apt, date)
+                return []
+            finally:
+                # Hold the slot for the delay so the rate limit is per-worker.
+                if self._delay:
+                    await asyncio.sleep(self._delay)
+            return flights
+
+    async def run(
+        self, legs: list[Leg], adults: int, currency: str, phase: str
+    ) -> dict[Leg, list[FlightResult]]:
+        """Fetch every leg concurrently, returning only those with results."""
+        if not legs:
+            return {}
+
+        logger.info("%s: %d queries (concurrency %d)", phase, len(legs), self._concurrency)
+        results = await asyncio.gather(
+            *(self._one(f, t, d, adults, currency) for f, t, d in legs)
+        )
+
+        found: dict[Leg, list[FlightResult]] = {}
+        for leg, flights in zip(legs, results, strict=True):
+            if flights:
+                found[leg] = flights[:3]
+        logger.info("%s done: %d/%d legs with flights", phase, len(found), len(legs))
+        return found
+
+
+# ── Multi-phase search ──────────────────────────────────────────────────────
 
 async def run_search(
     origin: str,
@@ -29,8 +103,21 @@ async def run_search(
     currency: str = "EUR",
     delay: float = DEFAULT_DELAY,
     trip_days: int = 0,
+    concurrency: int = MAX_CONCURRENCY,
 ) -> list[Route]:
-    """Run the full 3-phase search and return routes sorted by total price.
+    """Search split-ticket itineraries and return them sorted by total price.
+
+    Runs in phases, because each phase narrows the next: only hubs reachable
+    from *origin* are worth querying for onward flights, which cuts the query
+    count substantially versus a full cross product.
+
+      1.  origin -> hub            (the discounted leg)
+      1R. hub -> origin            (round-trip only)
+      2.  hub -> destination       (the international leg)
+      2R. destination -> hub       (round-trip only)
+
+    Return legs are queried as separate one-way searches rather than as a
+    round-trip query, because the whole point is to book the legs separately.
 
     Parameters
     ----------
@@ -40,8 +127,9 @@ async def run_search(
     hubs : dict           – {code: name} of hub airports to route through.
     adults : int          – Number of adult passengers.
     currency : str        – Currency code for prices.
-    delay : float         – Seconds to sleep between HTTP requests.
+    delay : float         – Seconds each worker waits between its requests.
     trip_days : int       – Trip duration in days (0 = one-way).
+    concurrency : int     – Maximum requests in flight at once.
 
     Returns
     -------
@@ -49,126 +137,75 @@ async def run_search(
     """
     roundtrip = trip_days > 0
     label = f"round-trip ({trip_days}d)" if roundtrip else "one-way"
+    logger.info(
+        "Search [%s]: %s -> %d hubs -> %d destinations over %d dates",
+        label, origin, len(hubs), len(destinations), len(dates),
+    )
 
-    # ── Phase 1: Domestic outbound (origin -> hubs) ────────────────────────
-    logger.info("Phase 1 [%s]: searching %s -> %d hubs x %d dates",
-                label, origin, len(hubs), len(dates))
+    async with build_client() as client:
+        fetcher = _LegFetcher(client, delay=delay, concurrency=concurrency)
 
-    dom_cache: dict[tuple[str, str], list[FlightResult]] = {}
+        # ── Phase 1: outbound discounted leg (origin -> hubs) ──────────────
+        dom_found = await fetcher.run(
+            [(origin, hub, date) for hub in hubs for date in dates],
+            adults, currency, "Phase 1 (origin -> hubs)",
+        )
+        # Re-key by (hub, date); the origin is constant across the phase.
+        dom_cache = {(hub, date): f for (_, hub, date), f in dom_found.items()}
 
-    for hub in hubs:
-        for date in dates:
-            try:
-                flights = await search(origin, hub, date, adults, currency)
-            except Exception:
-                logger.exception("Phase 1 error: %s->%s %s", origin, hub, date)
-                flights = []
+        hubs_found = {hub for hub, _ in dom_cache}
+        if not hubs_found:
+            logger.warning("No hub is reachable from %s on any requested date.", origin)
+            return []
 
-            if flights:
-                dom_cache[(hub, date)] = flights[:3]
-                best = flights[0]
-                logger.info("  %s->%s %s: %d flights, best %d %s",
-                            origin, hub, date, len(flights),
-                            best.price, currency)
-            else:
-                logger.info("  %s->%s %s: no flights", origin, hub, date)
+        # ── Phase 1R: return discounted leg (hubs -> origin) ───────────────
+        dom_ret_cache: dict[tuple[str, str], list[FlightResult]] = {}
+        if roundtrip:
+            ret_legs = [
+                (hub, origin, add_days(date, trip_days)) for hub, date in dom_cache
+            ]
+            ret_found = await fetcher.run(
+                ret_legs, adults, currency, "Phase 1R (hubs -> origin)"
+            )
+            # Map back from the return date to the outbound date it belongs to.
+            dom_ret_cache = {
+                (hub, date): ret_found[(hub, origin, add_days(date, trip_days))]
+                for hub, date in dom_cache
+                if (hub, origin, add_days(date, trip_days)) in ret_found
+            }
 
-            await asyncio.sleep(delay)
+        # ── Phase 2: outbound international leg (hubs -> destinations) ─────
+        intl_cache = await fetcher.run(
+            [
+                (hub, dest, date)
+                for hub, date in dom_cache
+                for dest in destinations
+            ],
+            adults, currency, "Phase 2 (hubs -> destinations)",
+        )
 
-    hubs_found = {hub for hub, _ in dom_cache}
-    logger.info("Phase 1 done: %d hub/date combos, %d hubs with flights",
-                len(dom_cache), len(hubs_found))
+        # ── Phase 2R: return international leg (destinations -> hubs) ──────
+        intl_ret_cache: dict[tuple[str, str, str], list[FlightResult]] = {}
+        if roundtrip:
+            ret_found = await fetcher.run(
+                [
+                    (dest, hub, add_days(date, trip_days))
+                    for hub, dest, date in intl_cache
+                ],
+                adults, currency, "Phase 2R (destinations -> hubs)",
+            )
+            intl_ret_cache = {
+                (hub, dest, date): ret_found[(dest, hub, add_days(date, trip_days))]
+                for hub, dest, date in intl_cache
+                if (dest, hub, add_days(date, trip_days)) in ret_found
+            }
 
-    # ── Phase 1R: Domestic return (hubs -> origin) ───────────────────────
-    dom_ret_cache: dict[tuple[str, str], list[FlightResult]] = {}
-
-    if roundtrip:
-        logger.info("Phase 1R: searching %d hubs -> %s (return legs)",
-                    len(hubs_found), origin)
-        for hub in hubs_found:
-            for date in dates:
-                if (hub, date) not in dom_cache:
-                    continue
-                ret_date = _return_date(date, trip_days)
-                try:
-                    flights = await search(hub, origin, ret_date, adults, currency)
-                except Exception:
-                    logger.exception("Phase 1R error: %s->%s %s", hub, origin, ret_date)
-                    flights = []
-
-                if flights:
-                    dom_ret_cache[(hub, date)] = flights[:3]
-                    best = flights[0]
-                    logger.info("  %s->%s %s: %d flights, best %d %s",
-                                hub, origin, ret_date, len(flights),
-                                best.price, currency)
-                else:
-                    logger.info("  %s->%s %s: no flights", hub, origin, ret_date)
-
-                await asyncio.sleep(delay)
-
-        logger.info("Phase 1R done: %d return domestic combos", len(dom_ret_cache))
-
-    # ── Phase 2: International outbound (hub -> destinations) ────────────
-    logger.info("Phase 2 [%s]: searching %d hubs -> %d destinations x %d dates",
-                label, len(hubs_found), len(destinations), len(dates))
-
-    intl_cache: dict[tuple[str, str, str], list[FlightResult]] = {}
-
-    for hub in hubs_found:
-        for dest in destinations:
-            for date in dates:
-                if (hub, date) not in dom_cache:
-                    continue
-                try:
-                    flights = await search(hub, dest, date, adults, currency)
-                except Exception:
-                    logger.exception("Phase 2 error: %s->%s %s", hub, dest, date)
-                    flights = []
-
-                if flights:
-                    intl_cache[(hub, dest, date)] = flights[:3]
-                    best = flights[0]
-                    logger.info("  %s->%s %s: %d flights, best %d %s",
-                                hub, dest, date, len(flights),
-                                best.price, currency)
-                else:
-                    logger.info("  %s->%s %s: no flights", hub, dest, date)
-
-                await asyncio.sleep(delay)
-
-    logger.info("Phase 2 done: %d international combos", len(intl_cache))
-
-    # ── Phase 2R: International return (destinations -> hub) ─────────────
-    intl_ret_cache: dict[tuple[str, str, str], list[FlightResult]] = {}
-
-    if roundtrip:
-        logger.info("Phase 2R: searching %d destinations -> %d hubs (return legs)",
-                    len(destinations), len(hubs_found))
-        for hub in hubs_found:
-            for dest in destinations:
-                for date in dates:
-                    if (hub, dest, date) not in intl_cache:
-                        continue
-                    ret_date = _return_date(date, trip_days)
-                    try:
-                        flights = await search(dest, hub, ret_date, adults, currency)
-                    except Exception:
-                        logger.exception("Phase 2R error: %s->%s %s", dest, hub, ret_date)
-                        flights = []
-
-                    if flights:
-                        intl_ret_cache[(hub, dest, date)] = flights[:3]
-                        best = flights[0]
-                        logger.info("  %s->%s %s: %d flights, best %d %s",
-                                    dest, hub, ret_date, len(flights),
-                                    best.price, currency)
-                    else:
-                        logger.info("  %s->%s %s: no flights", dest, hub, ret_date)
-
-                    await asyncio.sleep(delay)
-
-        logger.info("Phase 2R done: %d return international combos", len(intl_ret_cache))
+    if fetcher.parse_errors or fetcher.fetch_errors:
+        logger.warning(
+            "Search completed with %d parse failures and %d fetch failures — "
+            "results may be incomplete.",
+            fetcher.parse_errors, fetcher.fetch_errors,
+        )
 
     # ── Combine ──────────────────────────────────────────────────────────
     routes: list[Route] = []
@@ -189,7 +226,7 @@ async def run_search(
                 if not dom_rets or not intl_rets:
                     continue
                 dom_price = dom_out.price + dom_rets[0].price
-                ret = _return_date(date, trip_days)
+                ret = add_days(date, trip_days)
             else:
                 dom_price = dom_out.price
                 ret = ""
@@ -197,10 +234,9 @@ async def run_search(
             dom_discounted = dom_price * (1 - discount)
 
             for intl_out in intls[:2]:
-                if roundtrip:
-                    intl_price = intl_out.price + intl_rets[0].price
-                else:
-                    intl_price = intl_out.price
+                intl_price = (
+                    intl_out.price + intl_rets[0].price if roundtrip else intl_out.price
+                )
 
                 routes.append(Route(
                     date=date,
