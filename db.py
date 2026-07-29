@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS searches (
     hubs        TEXT    NOT NULL,   -- JSON list
     adults      INTEGER NOT NULL DEFAULT 1,
     currency    TEXT    NOT NULL DEFAULT 'EUR',
+    trip_days   INTEGER NOT NULL DEFAULT 0,  -- 0 = one-way
     best_price  REAL,
     best_route  TEXT,
     results     TEXT                -- JSON blob
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS favorites (
     destination   TEXT    NOT NULL,
     adults        INTEGER NOT NULL DEFAULT 1,
     currency      TEXT    NOT NULL DEFAULT 'EUR',
+    trip_days     INTEGER NOT NULL DEFAULT 0,  -- 0 = one-way
     record_price  REAL,
     record_date   TEXT,
     last_price    REAL,
@@ -77,10 +79,28 @@ async def _connect():
         await db.close()
 
 
+# Columns added after the first release. SQLite has no "ADD COLUMN IF NOT
+# EXISTS", so each is applied only when absent from the live table.
+MIGRATIONS = (
+    ("searches", "trip_days", "INTEGER NOT NULL DEFAULT 0"),
+    ("favorites", "trip_days", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+async def _existing_columns(db, table: str) -> set[str]:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in await cursor.fetchall()}
+
+
 async def init_db() -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then apply pending migrations."""
     async with _connect() as db:
         await db.executescript(SCHEMA)
+
+        for table, column, spec in MIGRATIONS:
+            if column not in await _existing_columns(db, table):
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+
         await db.commit()
 
 
@@ -96,15 +116,16 @@ async def save_search(
     best_price: float | None,
     best_route: str | None,
     results: object | None,
+    trip_days: int = 0,
 ) -> int:
     """Insert a completed search and return its row id."""
     async with _connect() as db:
         cursor = await db.execute(
             """
             INSERT INTO searches
-                (origin, destinations, dates, hubs, adults, currency,
+                (origin, destinations, dates, hubs, adults, currency, trip_days,
                  best_price, best_route, results)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin,
@@ -113,6 +134,7 @@ async def save_search(
                 _json(hubs),
                 adults,
                 currency,
+                trip_days,
                 best_price,
                 best_route,
                 _json(results) if results is not None else None,
@@ -154,16 +176,22 @@ async def add_favorite(
     currency: str,
     price: float | None,
     check_dates: list[str],
+    trip_days: int = 0,
 ) -> int:
-    """Add a route to favorites and return its row id."""
+    """Add a route to favorites and return its row id.
+
+    *trip_days* must match the trip shape the *price* was quoted for, otherwise
+    the scheduler would re-price a round-trip favourite as one-way and read the
+    difference as a price drop.
+    """
     now = _now()
     async with _connect() as db:
         cursor = await db.execute(
             """
             INSERT INTO favorites
-                (origin, hub, destination, adults, currency,
+                (origin, hub, destination, adults, currency, trip_days,
                  record_price, record_date, last_price, last_checked, check_dates)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin,
@@ -171,6 +199,7 @@ async def add_favorite(
                 destination,
                 adults,
                 currency,
+                trip_days,
                 price,
                 now if price is not None else None,
                 price,
