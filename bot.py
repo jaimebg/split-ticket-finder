@@ -10,9 +10,11 @@ Handler registration order matters (first-match routing):
 
 import asyncio
 import logging
+import sys
 
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
+import config
 from config import BOT_TOKEN, OWNER_ID
 from db import init_db
 from handlers.favorites import get_favorites_handlers
@@ -32,12 +34,23 @@ async def post_init(application: Application) -> None:
     """Run once after the Application is initialized (before polling)."""
     await init_db()
     logger.info("Database initialized.")
-    asyncio.create_task(scheduler_loop(application.bot, OWNER_ID))
+
+    # Keep a reference on the Application: asyncio only holds a weak reference to
+    # running tasks, so a bare create_task() can be garbage-collected mid-flight.
+    application.bot_data["scheduler_task"] = asyncio.create_task(
+        scheduler_loop(application.bot, OWNER_ID)
+    )
     logger.info("Scheduler task created.")
 
 
 def main() -> None:
     """Build the Application, register handlers, and start polling."""
+    try:
+        config.validate()
+    except config.ConfigError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
+
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     # ── 1. ConversationHandler (search flow) — FIRST for priority ──
