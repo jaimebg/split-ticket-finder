@@ -2,6 +2,13 @@
 __pycache__/
 *.pyc
 *.db
+*.db-wal
+*.db-shm
 .DS_Store
 venv/
 .venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.idea/
+.vscode/

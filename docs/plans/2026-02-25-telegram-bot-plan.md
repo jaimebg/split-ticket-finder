@@ -1,6 +1,5 @@
 # Flight Finder Telegram Bot — Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Build a Telegram bot that wraps the existing Google Flights scraper, providing a guided button-based UI to search flights, save favorites, view history, and get automatic price drop alerts.
 
