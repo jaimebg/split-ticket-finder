@@ -17,6 +17,15 @@ from telegram.ext import (
 from config import DEFAULT_HUBS, ORIGIN, PORTUGAL_HUBS, SPAIN_HUBS
 from db import save_search
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only, owner_only_callback
+from handlers.utils import (
+    ValidationError,
+    esc,
+    parse_date,
+    parse_date_list,
+    parse_iata_codes,
+    parse_positive_int,
+    split_message,
+)
 from scraper import generate_dates
 from search import format_results, routes_to_json, run_search
 
@@ -25,6 +34,16 @@ logger = logging.getLogger(__name__)
 # ── Conversation states ──────────────────────────────────────────────────────
 (DEST, TRIP_TYPE, TRIP_DAYS, DATE_MODE, FIXED_DATES,
  RANGE_START, RANGE_END, RANGE_EVERY, HUBS, CUSTOM_HUBS, CONFIRM) = range(11)
+
+MAX_TRIP_DAYS = 180
+MAX_DESTINATIONS = 10
+
+DATE_MODE_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
+        InlineKeyboardButton("Date range", callback_data="datemode_range"),
+    ],
+])
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -35,14 +54,16 @@ async def entry_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     query = update.callback_query
     await query.answer()
 
-    # Initialize user_data defaults
-    context.user_data["origin"] = ORIGIN
-    context.user_data["adults"] = 1
-    context.user_data["currency"] = "EUR"
-    context.user_data["destinations"] = {}
-    context.user_data["dates"] = []
-    context.user_data["hubs"] = {}
-    context.user_data["trip_days"] = 0
+    context.user_data.clear()
+    context.user_data.update(
+        origin=ORIGIN,
+        adults=1,
+        currency="EUR",
+        destinations={},
+        dates=[],
+        hubs={},
+        trip_days=0,
+    )
 
     await query.edit_message_text(
         "Where do you want to fly?\n"
@@ -58,13 +79,20 @@ async def entry_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 @owner_only
 async def dest_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """User sends destination codes."""
-    raw = update.message.text.strip().upper()
-    codes = [c.strip() for c in raw.split(",") if c.strip()]
-    if not codes:
-        await update.message.reply_text("Please send at least one airport code.")
+    try:
+        codes = parse_iata_codes(update.message.text, field="destination code")
+    except ValidationError as exc:
+        await update.message.reply_text(str(exc), parse_mode="HTML")
         return DEST
 
-    # Store as {code: code} — we don't have names, use code as placeholder
+    if len(codes) > MAX_DESTINATIONS:
+        await update.message.reply_text(
+            f"That's {len(codes)} destinations — the search would take hours. "
+            f"Please send at most {MAX_DESTINATIONS}.",
+        )
+        return DEST
+
+    # Names are unknown for arbitrary codes, so the code doubles as the label.
     context.user_data["destinations"] = {c: c for c in codes}
 
     keyboard = InlineKeyboardMarkup([
@@ -74,8 +102,7 @@ async def dest_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ],
     ])
     await update.message.reply_text(
-        f"Destinations: <b>{', '.join(codes)}</b>\n\n"
-        "One-way or round-trip?",
+        f"Destinations: <b>{esc(', '.join(codes))}</b>\n\nOne-way or round-trip?",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -91,17 +118,10 @@ async def trip_oneway(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await query.answer()
     context.user_data["trip_days"] = 0
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
-            InlineKeyboardButton("Date range", callback_data="datemode_range"),
-        ],
-    ])
     await query.edit_message_text(
-        "One-way selected.\n\n"
-        "How do you want to specify <b>departure</b> dates?",
+        "One-way selected.\n\nHow do you want to specify <b>departure</b> dates?",
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=DATE_MODE_KEYBOARD,
     )
     return DATE_MODE
 
@@ -121,13 +141,10 @@ async def trip_roundtrip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             InlineKeyboardButton("14 days", callback_data="tripdays_14"),
             InlineKeyboardButton("21 days", callback_data="tripdays_21"),
         ],
-        [
-            InlineKeyboardButton("Custom", callback_data="tripdays_custom"),
-        ],
+        [InlineKeyboardButton("Custom", callback_data="tripdays_custom")],
     ])
     await query.edit_message_text(
-        "Round-trip selected.\n\n"
-        "How long is the trip?",
+        "Round-trip selected.\n\nHow long is the trip?",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -144,17 +161,11 @@ async def tripdays_preset(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     days = int(query.data.split("_")[1])
     context.user_data["trip_days"] = days
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
-            InlineKeyboardButton("Date range", callback_data="datemode_range"),
-        ],
-    ])
     await query.edit_message_text(
         f"Round-trip, <b>{days} days</b>.\n\n"
         "How do you want to specify <b>departure</b> dates?",
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=DATE_MODE_KEYBOARD,
     )
     return DATE_MODE
 
@@ -174,28 +185,18 @@ async def tripdays_custom_prompt(update: Update, context: ContextTypes.DEFAULT_T
 @owner_only
 async def tripdays_custom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """User typed a custom number of days."""
-    raw = update.message.text.strip()
     try:
-        days = int(raw)
-        if days < 1:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("Please send a positive number (e.g. 12).")
+        days = parse_positive_int(update.message.text, field="days", maximum=MAX_TRIP_DAYS)
+    except ValidationError as exc:
+        await update.message.reply_text(str(exc), parse_mode="HTML")
         return TRIP_DAYS
 
     context.user_data["trip_days"] = days
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Fixed dates", callback_data="datemode_fixed"),
-            InlineKeyboardButton("Date range", callback_data="datemode_range"),
-        ],
-    ])
     await update.message.reply_text(
         f"Round-trip, <b>{days} days</b>.\n\n"
         "How do you want to specify <b>departure</b> dates?",
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=DATE_MODE_KEYBOARD,
     )
     return DATE_MODE
 
@@ -222,8 +223,7 @@ async def datemode_range(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "Send the <b>start date</b> for the range.\n"
-        "Format: <code>YYYY-MM-DD</code>",
+        "Send the <b>start date</b> for the range.\nFormat: <code>YYYY-MM-DD</code>",
         parse_mode="HTML",
     )
     return RANGE_START
@@ -234,14 +234,14 @@ async def datemode_range(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 @owner_only
 async def fixed_dates_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """User sends comma-separated dates."""
-    raw = update.message.text.strip()
-    dates = [d.strip() for d in raw.split(",") if d.strip()]
-    if not dates:
-        await update.message.reply_text("Please send at least one date.")
+    try:
+        dates = parse_date_list(update.message.text)
+    except ValidationError as exc:
+        await update.message.reply_text(str(exc), parse_mode="HTML")
         return FIXED_DATES
 
     context.user_data["dates"] = dates
-    return await _ask_hubs(update, context)
+    return await _ask_hubs(update.message, context)
 
 
 # ── RANGE_START / RANGE_END / RANGE_EVERY states ────────────────────────────
@@ -249,10 +249,15 @@ async def fixed_dates_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @owner_only
 async def range_start_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """User sends range start date."""
-    context.user_data["range_start"] = update.message.text.strip()
+    try:
+        start = parse_date(update.message.text, field="start date")
+    except ValidationError as exc:
+        await update.message.reply_text(str(exc), parse_mode="HTML")
+        return RANGE_START
+
+    context.user_data["range_start"] = start
     await update.message.reply_text(
-        "Send the <b>end date</b> for the range.\n"
-        "Format: <code>YYYY-MM-DD</code>",
+        "Send the <b>end date</b> for the range.\nFormat: <code>YYYY-MM-DD</code>",
         parse_mode="HTML",
     )
     return RANGE_END
@@ -261,7 +266,22 @@ async def range_start_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @owner_only
 async def range_end_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """User sends range end date."""
-    context.user_data["range_end"] = update.message.text.strip()
+    try:
+        end = parse_date(update.message.text, field="end date")
+    except ValidationError as exc:
+        await update.message.reply_text(str(exc), parse_mode="HTML")
+        return RANGE_END
+
+    start = context.user_data["range_start"]
+    if end < start:
+        await update.message.reply_text(
+            f"The end date <b>{end}</b> is before the start date <b>{start}</b>.\n"
+            "Send an end date on or after the start date.",
+            parse_mode="HTML",
+        )
+        return RANGE_END
+
+    context.user_data["range_end"] = end
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -274,7 +294,9 @@ async def range_end_input(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ],
     ])
     await update.message.reply_text(
-        "Sample a date every N days within the range:",
+        f"Range <b>{start}</b> to <b>{end}</b>.\n\n"
+        "Sample a departure date every N days within the range:",
+        parse_mode="HTML",
         reply_markup=keyboard,
     )
     return RANGE_EVERY
@@ -287,25 +309,28 @@ async def range_every_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     every = int(query.data.split("_")[1])
 
-    start = context.user_data["range_start"]
-    end = context.user_data["range_end"]
-    dates = generate_dates(start, end, every)
-
+    # Both endpoints were validated on the way in, so this cannot raise.
+    dates = generate_dates(
+        context.user_data["range_start"], context.user_data["range_end"], every
+    )
     if not dates:
-        await query.edit_message_text("No dates generated. Please try again with /start.")
+        await query.edit_message_text(
+            "That range produced no dates. Start over with /start.",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
         return ConversationHandler.END
 
     context.user_data["dates"] = dates
-    # We need to send a new message since _ask_hubs expects a message context
+    shown = ", ".join(dates[:5])
+    more = f"... and {len(dates) - 5} more" if len(dates) > 5 else ""
     await query.edit_message_text(
-        f"Generated <b>{len(dates)}</b> dates: {', '.join(dates[:5])}"
-        + (f"... and {len(dates) - 5} more" if len(dates) > 5 else ""),
+        f"Generated <b>{len(dates)}</b> dates: {shown}{more}",
         parse_mode="HTML",
     )
-    return await _ask_hubs_from_query(update, context)
+    return await _ask_hubs(query.message, context)
 
 
-# ── Hub selection helpers ────────────────────────────────────────────────────
+# ── Hub selection ────────────────────────────────────────────────────────────
 
 def _hub_keyboard() -> InlineKeyboardMarkup:
     """Build the hub-selection keyboard."""
@@ -317,56 +342,29 @@ def _hub_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def _ask_hubs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Send the hub-selection keyboard (from a message handler context)."""
+async def _ask_hubs(message, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Send the hub-selection keyboard as a reply to *message*."""
     dates = context.user_data["dates"]
-    await update.message.reply_text(
-        f"Dates set ({len(dates)} total).\n\n"
-        "Which hub airports?",
+    await message.reply_text(
+        f"Dates set ({len(dates)} total).\n\nWhich hub airports?",
         reply_markup=_hub_keyboard(),
     )
     return HUBS
 
 
-async def _ask_hubs_from_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Send the hub-selection keyboard (from a callback query context)."""
-    query = update.callback_query
-    dates = context.user_data["dates"]
-    await query.message.reply_text(
-        f"Dates set ({len(dates)} total).\n\n"
-        "Which hub airports?",
-        reply_markup=_hub_keyboard(),
-    )
-    return HUBS
-
-
-# ── HUBS state ───────────────────────────────────────────────────────────────
-
 @owner_only_callback
-async def hubs_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """All hubs."""
+async def hubs_preset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User picked one of the preset hub sets."""
     query = update.callback_query
     await query.answer()
-    context.user_data["hubs"] = dict(DEFAULT_HUBS)
-    return await _show_confirm(query, context)
 
-
-@owner_only_callback
-async def hubs_top2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Top 2: MAD, BCN."""
-    query = update.callback_query
-    await query.answer()
-    context.user_data["hubs"] = {"MAD": "Madrid", "BCN": "Barcelona"}
-    return await _show_confirm(query, context)
-
-
-@owner_only_callback
-async def hubs_top3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Top 3: MAD, BCN, LIS."""
-    query = update.callback_query
-    await query.answer()
-    context.user_data["hubs"] = {"MAD": "Madrid", "BCN": "Barcelona", "LIS": "Lisboa"}
-    return await _show_confirm(query, context)
+    presets = {
+        "hubs_all": dict(DEFAULT_HUBS),
+        "hubs_top2": {"MAD": "Madrid", "BCN": "Barcelona"},
+        "hubs_top3": {"MAD": "Madrid", "BCN": "Barcelona", "LIS": "Lisboa"},
+    }
+    context.user_data["hubs"] = presets[query.data]
+    return await _show_confirm(query.edit_message_text, context)
 
 
 @owner_only_callback
@@ -374,104 +372,68 @@ async def hubs_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """Custom hubs — ask user to type codes."""
     query = update.callback_query
     await query.answer()
-    all_codes = ", ".join(DEFAULT_HUBS.keys())
     await query.edit_message_text(
         "Send hub airport codes separated by commas.\n"
-        f"Available: <code>{all_codes}</code>\n"
+        f"Known hubs: <code>{', '.join(DEFAULT_HUBS)}</code>\n"
         "Or type any IATA codes.",
         parse_mode="HTML",
     )
     return CUSTOM_HUBS
 
 
-# ── CUSTOM_HUBS state ───────────────────────────────────────────────────────
-
 @owner_only
 async def custom_hubs_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """User types custom hub codes."""
-    raw = update.message.text.strip().upper()
-    codes = [c.strip() for c in raw.split(",") if c.strip()]
-    if not codes:
-        await update.message.reply_text("Please send at least one hub code.")
+    try:
+        codes = parse_iata_codes(update.message.text, field="hub code")
+    except ValidationError as exc:
+        await update.message.reply_text(str(exc), parse_mode="HTML")
         return CUSTOM_HUBS
 
-    # Look up names from known hubs, fall back to code itself
-    all_known = {**SPAIN_HUBS, **PORTUGAL_HUBS}
-    hubs = {c: all_known.get(c, c) for c in codes}
-    context.user_data["hubs"] = hubs
-
-    return await _show_confirm_from_message(update, context)
+    known = {**SPAIN_HUBS, **PORTUGAL_HUBS}
+    context.user_data["hubs"] = {c: known.get(c, c) for c in codes}
+    return await _show_confirm(update.message.reply_text, context)
 
 
-# ── CONFIRM state helpers ────────────────────────────────────────────────────
+# ── CONFIRM state ────────────────────────────────────────────────────────────
 
-async def _show_confirm(query, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Display confirmation summary (from a callback query)."""
-    ud = context.user_data
-    origin = ud["origin"]
-    dests = ud["destinations"]
-    dates = ud["dates"]
-    hubs = ud["hubs"]
-    trip_days = ud.get("trip_days", 0)
-    trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
-    n_queries = len(hubs) * len(dates) + len(hubs) * len(dests) * len(dates)
-    if trip_days:
-        n_queries *= 2  # return legs double the queries
+def _summary_text(user_data: dict) -> str:
+    """Build the pre-flight summary shown before a search starts."""
+    dests = user_data["destinations"]
+    dates = user_data["dates"]
+    hubs = user_data["hubs"]
+    trip_days = user_data.get("trip_days", 0)
 
-    summary = (
-        "<b>Search summary</b>\n\n"
-        f"Origin: <code>{origin}</code>\n"
-        f"Destinations: <code>{', '.join(dests.keys())}</code>\n"
-        f"Trip: <b>{trip_label}</b>\n"
-        f"Dates: <b>{len(dates)}</b> ({dates[0]} to {dates[-1]})\n"
-        f"Hubs: <code>{', '.join(hubs.keys())}</code>\n"
-        f"~<b>{n_queries}</b> queries\n\n"
-        "Ready?"
-    )
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Start search", callback_data="search_go"),
-            InlineKeyboardButton("Cancel", callback_data="search_cancel"),
-        ],
-    ])
-    await query.edit_message_text(summary, parse_mode="HTML", reply_markup=keyboard)
-    return CONFIRM
-
-
-async def _show_confirm_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Display confirmation summary (from a message handler)."""
-    ud = context.user_data
-    origin = ud["origin"]
-    dests = ud["destinations"]
-    dates = ud["dates"]
-    hubs = ud["hubs"]
-    trip_days = ud.get("trip_days", 0)
-    trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
-    n_queries = len(hubs) * len(dates) + len(hubs) * len(dests) * len(dates)
+    # Phase 1 queries every hub/date; phase 2 every hub/dest/date. Round trips
+    # double both. This is an upper bound — phase 2 skips unreachable hubs.
+    n_queries = len(hubs) * len(dates) * (1 + len(dests))
     if trip_days:
         n_queries *= 2
 
-    summary = (
+    trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
+    return (
         "<b>Search summary</b>\n\n"
-        f"Origin: <code>{origin}</code>\n"
-        f"Destinations: <code>{', '.join(dests.keys())}</code>\n"
+        f"Origin: <code>{esc(user_data['origin'])}</code>\n"
+        f"Destinations: <code>{esc(', '.join(dests))}</code>\n"
         f"Trip: <b>{trip_label}</b>\n"
         f"Dates: <b>{len(dates)}</b> ({dates[0]} to {dates[-1]})\n"
-        f"Hubs: <code>{', '.join(hubs.keys())}</code>\n"
-        f"~<b>{n_queries}</b> queries\n\n"
+        f"Hubs: <code>{esc(', '.join(hubs))}</code>\n"
+        f"Up to <b>{n_queries}</b> queries\n\n"
         "Ready?"
     )
+
+
+async def _show_confirm(send, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Display the confirmation summary via *send* (an edit or reply callable)."""
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("Start search", callback_data="search_go"),
             InlineKeyboardButton("Cancel", callback_data="search_cancel"),
         ],
     ])
-    await update.message.reply_text(summary, parse_mode="HTML", reply_markup=keyboard)
+    await send(_summary_text(context.user_data), parse_mode="HTML", reply_markup=keyboard)
     return CONFIRM
 
-
-# ── CONFIRM state handlers ───────────────────────────────────────────────────
 
 @owner_only_callback
 async def confirm_go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -480,10 +442,18 @@ async def confirm_go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     await query.edit_message_text("On it, I'll message you when done.")
 
-    chat_id = update.effective_chat.id
-    user_data = dict(context.user_data)  # snapshot
+    ud = context.user_data
+    params = {
+        "origin": ud["origin"],
+        "destinations": dict(ud["destinations"]),
+        "dates": list(ud["dates"]),
+        "hubs": dict(ud["hubs"]),
+        "adults": ud["adults"],
+        "currency": ud["currency"],
+        "trip_days": ud.get("trip_days", 0),
+    }
     context.application.create_task(
-        _run_search_task(context.application.bot, chat_id, user_data),
+        run_and_report(context.application.bot, update.effective_chat.id, params),
         update=update,
     )
     return ConversationHandler.END
@@ -494,120 +464,72 @@ async def confirm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """User cancelled the search."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
-        "Search cancelled.",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
+    await query.edit_message_text("Search cancelled.", reply_markup=MAIN_MENU_KEYBOARD)
     return ConversationHandler.END
 
 
 # ── Background search task ───────────────────────────────────────────────────
 
-def _split_message(text: str, limit: int = 4000) -> list[str]:
-    """Split text on double-newline boundaries into chunks up to *limit* chars."""
-    blocks = text.split("\n\n")
-    chunks: list[str] = []
-    current = ""
+async def run_and_report(bot, chat_id: int, params: dict) -> None:
+    """Run a search, send the results, persist them, and offer to track them.
 
-    for block in blocks:
-        candidate = f"{current}\n\n{block}" if current else block
-        if len(candidate) <= limit:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            # If a single block exceeds the limit, send it as-is
-            if len(block) > limit:
-                chunks.append(block)
-                current = ""
-            else:
-                current = block
-
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-async def _run_search_task(bot, chat_id: int, user_data: dict) -> None:
-    """Execute the search pipeline in the background and send results."""
+    Shared by the guided flow and by history reruns so both paths store the same
+    fields — notably ``trip_days``, without which a rerun would silently change
+    the trip shape.
+    """
     try:
-        origin = user_data["origin"]
-        destinations = user_data["destinations"]
-        dates = user_data["dates"]
-        hubs = user_data["hubs"]
-        adults = user_data["adults"]
-        currency = user_data["currency"]
-        trip_days = user_data.get("trip_days", 0)
-
-        # 1. Run the search
-        routes = await run_search(
-            origin=origin,
-            destinations=destinations,
-            dates=dates,
-            hubs=hubs,
-            adults=adults,
-            currency=currency,
-            trip_days=trip_days,
-        )
-
-        # 2. Format results
-        text = format_results(routes, origin, currency)
-
-        # 3. Split and send
-        chunks = _split_message(text)
-        for chunk in chunks:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=chunk,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-
-        # 4. Save to DB (pass parsed list, save_search handles JSON encoding)
-        results_data = json.loads(routes_to_json(routes)) if routes else None
-        best_price = routes[0].total if routes else None
-        best_route = (
-            f"{origin}->{routes[0].hub}->{routes[0].dest} {routes[0].date}"
-            if routes else None
-        )
-        await save_search(
-            origin=origin,
-            destinations=list(destinations.keys()),
-            dates=dates,
-            hubs=list(hubs.keys()),
-            adults=adults,
-            currency=currency,
-            best_price=best_price,
-            best_route=best_route,
-            results=results_data,
-        )
-
-        # 5. Offer to save best as favorite
-        if routes:
-            best = routes[0]
-            callback_data = f"savefav_{best.hub}_{best.dest}_{best.date}"
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(
-                    "Save best as favorite",
-                    callback_data=callback_data,
-                )],
-            ])
-            await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"Best route: <b>{best.total:,.0f} {currency}</b> "
-                    f"via {best.hub} to {best.dest} on {best.date}"
-                ),
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
-
+        routes = await run_search(**params)
     except Exception:
-        logger.exception("Background search task failed")
+        logger.exception("Search failed for %s", params)
         await bot.send_message(
             chat_id=chat_id,
-            text="Search failed. Check bot logs for details.",
+            text="Search failed — check the bot logs for details.",
         )
+        return
+
+    origin = params["origin"]
+    currency = params["currency"]
+
+    for chunk in split_message(format_results(routes, origin, currency)):
+        await bot.send_message(
+            chat_id=chat_id,
+            text=chunk,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+    results_data = json.loads(routes_to_json(routes)) if routes else None
+    best = routes[0] if routes else None
+    search_id = await save_search(
+        origin=origin,
+        destinations=list(params["destinations"]),
+        dates=params["dates"],
+        hubs=list(params["hubs"]),
+        adults=params["adults"],
+        currency=currency,
+        trip_days=params.get("trip_days", 0),
+        best_price=best.total if best else None,
+        best_route=f"{origin}->{best.hub}->{best.dest} {best.date}" if best else None,
+        results=results_data,
+    )
+
+    if not best:
+        return
+
+    # The button carries only the search id; the handler reads price and trip
+    # shape back from the stored row.
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Track this route", callback_data=f"savefav_{search_id}")],
+    ])
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"Best route: <b>{best.total:,.0f} {currency}</b> "
+            f"via {esc(best.hub)} to {esc(best.dest)} on {best.date}"
+        ),
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
 
 
 # ── Fallback ─────────────────────────────────────────────────────────────────
@@ -615,10 +537,8 @@ async def _run_search_task(bot, chat_id: int, user_data: dict) -> None:
 @owner_only
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle /cancel inside the conversation."""
-    await update.message.reply_text(
-        "Search cancelled.",
-        reply_markup=MAIN_MENU_KEYBOARD,
-    )
+    context.user_data.clear()
+    await update.message.reply_text("Search cancelled.", reply_markup=MAIN_MENU_KEYBOARD)
     return ConversationHandler.END
 
 
@@ -627,9 +547,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def build_search_conversation() -> ConversationHandler:
     """Construct and return the search ConversationHandler."""
     return ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(entry_search, pattern="^menu_search$"),
-        ],
+        entry_points=[CallbackQueryHandler(entry_search, pattern="^menu_search$")],
         states={
             DEST: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, dest_input),
@@ -660,9 +578,7 @@ def build_search_conversation() -> ConversationHandler:
                 CallbackQueryHandler(range_every_input, pattern=r"^every_\d+$"),
             ],
             HUBS: [
-                CallbackQueryHandler(hubs_all, pattern="^hubs_all$"),
-                CallbackQueryHandler(hubs_top2, pattern="^hubs_top2$"),
-                CallbackQueryHandler(hubs_top3, pattern="^hubs_top3$"),
+                CallbackQueryHandler(hubs_preset, pattern=r"^hubs_(all|top2|top3)$"),
                 CallbackQueryHandler(hubs_custom, pattern="^hubs_custom$"),
             ],
             CUSTOM_HUBS: [
@@ -673,7 +589,5 @@ def build_search_conversation() -> ConversationHandler:
                 CallbackQueryHandler(confirm_cancel, pattern="^search_cancel$"),
             ],
         },
-        fallbacks=[
-            CommandHandler("cancel", cancel_command),
-        ],
+        fallbacks=[CommandHandler("cancel", cancel_command)],
     )

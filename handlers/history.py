@@ -1,49 +1,29 @@
 """Search history handlers — view past searches and rerun them."""
 from __future__ import annotations
 
-import json
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from config import DEFAULT_HUBS, ORIGIN
-from db import get_search_by_id, get_searches, save_search
+from db import get_search_by_id, get_searches
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
+from handlers.utils import esc, load_json_list, split_message
 from scraper import Route
-from search import format_results, routes_to_json, run_search
 
 logger = logging.getLogger(__name__)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _split_message(text: str, limit: int = 4000) -> list[str]:
-    """Split text on double-newline boundaries into chunks up to *limit* chars."""
-    blocks = text.split("\n\n")
-    chunks: list[str] = []
-    current = ""
-
-    for block in blocks:
-        candidate = f"{current}\n\n{block}" if current else block
-        if len(candidate) <= limit:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            if len(block) > limit:
-                chunks.append(block)
-                current = ""
-            else:
-                current = block
-
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def _route_from_dict(d: dict) -> Route:
-    """Reconstruct a Route dataclass instance from a stored dict."""
+    """Reconstruct a Route from a stored dict.
+
+    ``return_date`` matters beyond display: ``format_results`` uses it to decide
+    whether the stored prices are round-trip totals, so dropping it would render
+    a round-trip search as one-way with round-trip prices.
+    """
     return Route(
         date=d["date"],
         hub=d["hub"],
@@ -54,6 +34,7 @@ def _route_from_dict(d: dict) -> Route:
         dom_discounted=d["dom_discounted"],
         intl_price=d["intl_price"],
         total=d["total"],
+        return_date=d.get("return_date", ""),
         dom_airlines=d.get("dom_airlines", []),
         dom_stops=d.get("dom_stops", 0),
         dom_dur=d.get("dom_dur", 0),
@@ -82,18 +63,13 @@ async def history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     buttons: list[list[InlineKeyboardButton]] = []
     for s in searches:
-        # Parse destinations from JSON
-        try:
-            dests = json.loads(s["destinations"])
-        except (json.JSONDecodeError, TypeError):
-            dests = []
-
-        dest_str = ",".join(dests) if isinstance(dests, list) else str(dests)
+        dests = load_json_list(s.get("destinations"))
+        dest_str = ",".join(str(d) for d in dests) or "?"
         date_part = s["created_at"][:10] if s.get("created_at") else "?"
         price_str = f"{s['best_price']:,.0f}" if s.get("best_price") else "N/A"
+        trip_str = "RT" if (s.get("trip_days") or 0) else "OW"
 
-        label = f"{date_part} | {s['origin']}->{dest_str} | {price_str}"
-
+        label = f"{date_part} | {s['origin']}->{dest_str} | {trip_str} | {price_str}"
         buttons.append([
             InlineKeyboardButton(f"View: {label}", callback_data=f"hist_view_{s['id']}"),
             InlineKeyboardButton("Rerun", callback_data=f"hist_rerun_{s['id']}"),
@@ -111,6 +87,8 @@ async def history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @owner_only_callback
 async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View stored results for a past search."""
+    from search import format_results
+
     query = update.callback_query
     await query.answer()
 
@@ -118,60 +96,33 @@ async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     row = await get_search_by_id(search_id)
 
     if not row:
-        await query.edit_message_text(
-            "Search not found.",
-            reply_markup=MAIN_MENU_KEYBOARD,
-        )
+        await query.edit_message_text("Search not found.", reply_markup=MAIN_MENU_KEYBOARD)
         return
 
-    # Parse stored results
-    results_raw = row.get("results")
-    if not results_raw:
+    result_dicts = load_json_list(row.get("results"))
+    if not result_dicts:
         await query.edit_message_text(
             "No results stored for this search.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
 
-    try:
-        result_dicts = json.loads(results_raw) if isinstance(results_raw, str) else results_raw
-    except (json.JSONDecodeError, TypeError):
-        await query.edit_message_text(
-            "Could not parse stored results.",
-            reply_markup=MAIN_MENU_KEYBOARD,
-        )
-        return
-
-    # Reconstruct Route objects
     routes = [_route_from_dict(d) for d in result_dicts]
+    text = format_results(routes, row.get("origin") or ORIGIN, row.get("currency") or "EUR")
 
-    origin = row.get("origin", ORIGIN)
-    currency = row.get("currency", "EUR")
-
-    text = format_results(routes, origin, currency)
-
-    # Split and send
-    chunks = _split_message(text)
-
-    # Edit the original message with the first chunk
-    await query.edit_message_text(
-        chunks[0],
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
-
-    # Send remaining chunks as new messages
+    chunks = split_message(text)
+    await query.edit_message_text(chunks[0], parse_mode="HTML", disable_web_page_preview=True)
     for chunk in chunks[1:]:
         await query.message.reply_text(
-            chunk,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+            chunk, parse_mode="HTML", disable_web_page_preview=True
         )
 
 
 @owner_only_callback
 async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Rerun a past search with the same parameters."""
+    from handlers.search_flow import run_and_report
+
     query = update.callback_query
     await query.answer()
 
@@ -179,90 +130,43 @@ async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     row = await get_search_by_id(search_id)
 
     if not row:
+        await query.edit_message_text("Search not found.", reply_markup=MAIN_MENU_KEYBOARD)
+        return
+
+    dest_codes = [str(c) for c in load_json_list(row.get("destinations"))]
+    dates = [str(d) for d in load_json_list(row.get("dates"))]
+    hub_codes = [str(c) for c in load_json_list(row.get("hubs"))]
+
+    if not dest_codes or not dates or not hub_codes:
         await query.edit_message_text(
-            "Search not found.",
+            "That search is missing parameters and can't be rerun.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
 
-    # Parse parameters from the stored search
-    origin = row.get("origin", ORIGIN)
-    currency = row.get("currency", "EUR")
-    adults = row.get("adults", 1)
+    # trip_days has to be replayed too, or a round-trip search silently reruns
+    # as one-way and the two results aren't comparable.
+    params = {
+        "origin": row.get("origin") or ORIGIN,
+        "destinations": {c: c for c in dest_codes},
+        "dates": dates,
+        "hubs": {c: DEFAULT_HUBS.get(c, c) for c in hub_codes},
+        "adults": row.get("adults") or 1,
+        "currency": row.get("currency") or "EUR",
+        "trip_days": row.get("trip_days") or 0,
+    }
 
-    try:
-        dest_codes = json.loads(row["destinations"]) if isinstance(row["destinations"], str) else row["destinations"]
-    except (json.JSONDecodeError, TypeError):
-        dest_codes = []
+    trip_str = f"round-trip {params['trip_days']}d" if params["trip_days"] else "one-way"
+    await query.edit_message_text(
+        f"Rerunning <b>{esc(params['origin'])} -> {esc(','.join(dest_codes))}</b> "
+        f"({trip_str}, {len(dates)} dates). I'll message you when done.",
+        parse_mode="HTML",
+    )
 
-    try:
-        dates = json.loads(row["dates"]) if isinstance(row["dates"], str) else row["dates"]
-    except (json.JSONDecodeError, TypeError):
-        dates = []
-
-    try:
-        hub_codes = json.loads(row["hubs"]) if isinstance(row["hubs"], str) else row["hubs"]
-    except (json.JSONDecodeError, TypeError):
-        hub_codes = []
-
-    # Reconstruct dicts: destinations as {code: code}, hubs as {code: name}
-    all_known_hubs = dict(DEFAULT_HUBS)
-    destinations = {c: c for c in dest_codes}
-    hubs = {c: all_known_hubs.get(c, c) for c in hub_codes}
-
-    await query.edit_message_text("On it, I'll message you when done.")
-
-    chat_id = update.effective_chat.id
-    bot = context.application.bot
-
-    async def _rerun_task() -> None:
-        try:
-            routes = await run_search(
-                origin=origin,
-                destinations=destinations,
-                dates=dates,
-                hubs=hubs,
-                adults=adults,
-                currency=currency,
-            )
-
-            text = format_results(routes, origin, currency)
-            chunks = _split_message(text)
-            for chunk in chunks:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=chunk,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-
-            # Save to DB
-            results_data = json.loads(routes_to_json(routes)) if routes else None
-            best_price = routes[0].total if routes else None
-            best_route = (
-                f"{origin}->{routes[0].hub}->{routes[0].dest} {routes[0].date}"
-                if routes else None
-            )
-            await save_search(
-                origin=origin,
-                destinations=list(destinations.keys()),
-                dates=dates,
-                hubs=list(hubs.keys()),
-                adults=adults,
-                currency=currency,
-                best_price=best_price,
-                best_route=best_route,
-                results=results_data,
-            )
-
-        except Exception:
-            logger.exception("History rerun task failed")
-            await bot.send_message(
-                chat_id=chat_id,
-                text="Rerun failed. Check bot logs for details.",
-            )
-
-    context.application.create_task(_rerun_task(), update=update)
+    context.application.create_task(
+        run_and_report(context.application.bot, update.effective_chat.id, params),
+        update=update,
+    )
 
 
 # ── Handler list builder ────────────────────────────────────────────────────
