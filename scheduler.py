@@ -7,13 +7,13 @@ import logging
 
 from config import (
     ALERT_INTERVAL_HOURS,
+    DEFAULT_DELAY,
     DISCOUNT_AIRPORTS,
     DOMESTIC_DISCOUNT,
-    DEFAULT_DELAY,
     PRICE_DROP_THRESHOLD,
 )
 from db import add_price_check, get_favorites, update_favorite_price
-from scraper import search
+from scraper import FetchError, ParseError, add_days, search
 
 logger = logging.getLogger(__name__)
 
@@ -53,34 +53,43 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
             logger.warning("Favorite %d has no check_dates, skipping.", fav_id)
             continue
 
+        # A favourite saved from a round-trip search has a record price covering
+        # all four legs. Re-pricing it as one-way would halve the total and read
+        # as a price drop on every single cycle, so the trip shape has to be
+        # replayed exactly as it was quoted.
+        trip_days = fav.get("trip_days") or 0
+        roundtrip = trip_days > 0
+
         sampled = _sample_dates(all_dates, max_n=5)
         best_price: float | None = None
         best_detail: dict | None = None
 
         for date in sampled:
             try:
-                # Search domestic leg: origin -> hub
-                dom_results = await search(origin, hub, date, adults, currency)
-                if not dom_results:
+                legs = [(origin, hub, date), (hub, destination, date)]
+                if roundtrip:
+                    ret_date = add_days(date, trip_days)
+                    legs += [(destination, hub, ret_date), (hub, origin, ret_date)]
+
+                prices = []
+                for from_apt, to_apt, leg_date in legs:
+                    results = await search(from_apt, to_apt, leg_date, adults, currency)
                     await asyncio.sleep(DEFAULT_DELAY)
+                    if not results:
+                        break
+                    prices.append(results[0].price)
+
+                # Any missing leg makes the itinerary unbookable — skip the date.
+                if len(prices) != len(legs):
                     continue
 
-                # Search international leg: hub -> destination
-                intl_results = await search(hub, destination, date, adults, currency)
-                if not intl_results:
-                    await asyncio.sleep(DEFAULT_DELAY)
-                    continue
+                # Domestic legs are the origin<->hub ones: first, and last when
+                # this is a round trip.
+                dom_price = prices[0] + (prices[3] if roundtrip else 0)
+                intl_price = prices[1] + (prices[2] if roundtrip else 0)
 
-                dom_price = dom_results[0].price
-                intl_price = intl_results[0].price
-
-                # Apply domestic discount if hub is in DISCOUNT_AIRPORTS
-                if hub in DISCOUNT_AIRPORTS:
-                    dom_discounted = dom_price * (1 - DOMESTIC_DISCOUNT)
-                else:
-                    dom_discounted = float(dom_price)
-
-                total = dom_discounted + intl_price
+                discount = DOMESTIC_DISCOUNT if hub in DISCOUNT_AIRPORTS else 0.0
+                total = dom_price * (1 - discount) + intl_price
 
                 if best_price is None or total < best_price:
                     best_price = total
@@ -88,16 +97,18 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
                         "hub": hub,
                         "dest": destination,
                         "date": date,
+                        "return_date": add_days(date, trip_days) if roundtrip else "",
+                        "trip_days": trip_days,
                         "dom_price": dom_price,
                         "intl_price": intl_price,
                     }
 
+            except (FetchError, ParseError) as exc:
+                logger.warning("Favorite %d on %s: %s", fav_id, date, exc)
             except Exception:
                 logger.exception(
                     "Error checking favorite %d on date %s", fav_id, date
                 )
-
-            await asyncio.sleep(DEFAULT_DELAY)
 
         # After all dates checked for this favorite
         if best_price is None:
