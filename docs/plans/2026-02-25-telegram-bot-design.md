@@ -5,7 +5,7 @@
 
 ## Problem
 
-Finding cheap flights from the Canary Islands means exploiting the 85% resident
+Finding cheap flights from the Canary Islands means exploiting the 75% resident
 discount on Spanish domestic flights. The optimal strategy is splitting the trip:
 cheap domestic hop to a peninsula hub, then international from there. The existing
 CLI script (`flight_finder.py`) automates this but requires terminal access and
