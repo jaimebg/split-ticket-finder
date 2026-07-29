@@ -4,13 +4,29 @@ import asyncio
 import base64
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from config import SOCS_COOKIE
+import httpx
+
+from config import MAX_RETRIES, REQUEST_TIMEOUT, SOCS_COOKIE
 
 logger = logging.getLogger(__name__)
+
+
+class ParseError(RuntimeError):
+    """Raised when a response could not be parsed as a flight listing.
+
+    Distinguishes "Google returned something we don't understand" (layout
+    change, consent wall, rate limiting) from the legitimate "this route has no
+    flights on this date", which is an empty result list.
+    """
+
+
+class FetchError(RuntimeError):
+    """Raised when the HTTP request failed after exhausting retries."""
 
 
 # ============================================================
@@ -141,6 +157,11 @@ def generate_dates(start, end, every):
     return dates
 
 
+def add_days(date, days):
+    """Return *date* shifted by *days*, both as "YYYY-MM-DD" strings."""
+    return (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 # ============================================================
 # Parser
 # ============================================================
@@ -195,18 +216,26 @@ def _parse_offer(offer):
 
 
 def parse_flights(html):
+    """Extract flight offers from a Google Flights results page.
+
+    Returns an empty list when the page is a valid results page that simply has
+    no offers for the requested route/date. Raises :class:`ParseError` when the
+    page is not a results page at all — a consent wall, a rate-limit response,
+    or a layout change on Google's side. Callers need that distinction: the
+    first is a normal outcome, the second means the scraper is broken.
+    """
     if not html or len(html) < 1000:
-        return []
+        raise ParseError(f"response too short to be a results page ({len(html or '')} bytes)")
     m = re.search(r'<script[^>]*class="ds:1"[^>]*>(.*?)</script>', html, re.DOTALL)
     if not m:
-        return []
+        raise ParseError("no ds:1 payload found (consent wall, block, or layout change)")
     dm = re.search(r'data:(.*?)(?:,\s*sideChannel|\}\s*\)\s*;?\s*$)', m.group(1), re.DOTALL)
     if not dm:
-        return []
+        raise ParseError("ds:1 payload found but it carries no data: field")
     try:
         data = json.loads(dm.group(1).strip())
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as exc:
+        raise ParseError(f"ds:1 data field is not valid JSON: {exc}") from exc
 
     results = []
     for section in (
@@ -231,35 +260,97 @@ def parse_flights(html):
 # Async scraper
 # ============================================================
 
-async def fetch_html(from_apt, to_apt, date, adults=1, currency="EUR", return_date=None):
-    """Fetch Google Flights HTML using curl as an async subprocess."""
-    url = build_url(from_apt, to_apt, date, adults, currency, return_date=return_date)
-    proc = await asyncio.create_subprocess_exec(
-        "curl", "-s", "--compressed",
-        "-H", "accept: text/html,application/xhtml+xml,application/xml;q=0.9",
-        "-H", "accept-language: es-ES,es;q=0.9,en;q=0.8",
-        "-H", (
-            "user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "-H", f"cookie: SOCS={SOCS_COOKIE}",
-        "--max-time", "20",
-        url,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+HEADERS = {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+    "accept-language": "es-ES,es;q=0.9,en;q=0.8",
+    "user-agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+}
+
+# Status codes worth retrying: rate limiting and transient server errors.
+RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+def build_client() -> httpx.AsyncClient:
+    """Create the shared HTTP client.
+
+    One client per search run means one connection pool, so the many requests a
+    search issues reuse connections instead of re-doing TLS every time.
+    """
+    return httpx.AsyncClient(
+        headers=HEADERS,
+        cookies={"SOCS": SOCS_COOKIE},
+        timeout=REQUEST_TIMEOUT,
+        follow_redirects=True,
     )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        logger.warning(
-            "curl failed (rc=%d) for %s->%s %s: %s",
-            proc.returncode, from_apt, to_apt, date,
-            stderr.decode("utf-8", errors="replace").strip(),
-        )
-        return ""
-    return stdout.decode("utf-8", errors="replace")
 
 
-async def search(from_apt, to_apt, date, adults=1, currency="EUR", return_date=None):
-    """Search flights and return parsed results."""
-    html = await fetch_html(from_apt, to_apt, date, adults, currency, return_date=return_date)
+async def fetch_html(
+    from_apt,
+    to_apt,
+    date,
+    adults=1,
+    currency="EUR",
+    return_date=None,
+    client: httpx.AsyncClient | None = None,
+):
+    """Fetch a Google Flights results page, retrying transient failures.
+
+    Raises :class:`FetchError` once the retry budget is exhausted. Pass *client*
+    to reuse a connection pool across many calls; otherwise a throwaway client
+    is created for this single request.
+    """
+    url = build_url(from_apt, to_apt, date, adults, currency, return_date=return_date)
+    leg = f"{from_apt}->{to_apt} {date}"
+
+    if client is None:
+        async with build_client() as own_client:
+            return await fetch_html(
+                from_apt, to_apt, date, adults, currency, return_date, client=own_client
+            )
+
+    last_error = "unknown error"
+    for attempt in range(MAX_RETRIES + 1):
+        if attempt:
+            # Exponential backoff with jitter, so parallel workers that hit a
+            # rate limit together don't retry in lockstep.
+            delay = 2**attempt + random.uniform(0, 1)
+            logger.info("Retrying %s in %.1fs (attempt %d): %s", leg, delay, attempt + 1, last_error)
+            await asyncio.sleep(delay)
+
+        try:
+            response = await client.get(url)
+        except httpx.HTTPError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            continue
+
+        if response.status_code in RETRY_STATUS:
+            last_error = f"HTTP {response.status_code}"
+            continue
+        if response.status_code != 200:
+            raise FetchError(f"{leg}: HTTP {response.status_code}")
+        return response.text
+
+    raise FetchError(f"{leg}: giving up after {MAX_RETRIES + 1} attempts ({last_error})")
+
+
+async def search(
+    from_apt,
+    to_apt,
+    date,
+    adults=1,
+    currency="EUR",
+    return_date=None,
+    client: httpx.AsyncClient | None = None,
+):
+    """Search flights and return parsed results, cheapest first.
+
+    Propagates :class:`FetchError` and :class:`ParseError` so callers can tell a
+    broken scraper from a route with no availability.
+    """
+    html = await fetch_html(
+        from_apt, to_apt, date, adults, currency, return_date=return_date, client=client
+    )
     return parse_flights(html)
