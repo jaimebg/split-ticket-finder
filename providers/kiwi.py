@@ -232,7 +232,12 @@ class KiwiProvider:
             flt["maxStopsCount"] = query.max_stops
         if query.min_layover is not None:
             # stopoverTime is expressed in HOURS. Passing seconds or minutes
-            # here does not error -- it silently matches nothing.
+            # here does not error -- it silently matches nothing. Flooring to
+            # whole hours is deliberate: it asks the API for a superset (e.g.
+            # 90 minutes -> "at least 1 hour"), and the exact per-offer
+            # min_layover computed in _to_offer enforces the real minute
+            # threshold afterwards. Ceiling would instead silently drop valid
+            # offers just above the floor (e.g. a 90-119 minute connection).
             flt["stopoverTime"] = {"start": max(0, query.min_layover // 60), "end": 48}
         if query.exclude_carriers:
             flt["excludeCarriers"] = list(query.exclude_carriers)
@@ -312,5 +317,15 @@ class KiwiProvider:
         if itineraries is None:
             raise ProviderParseError("OnewayItineraries: response carries no itineraries")
         offers = [self._to_offer(raw, query) for raw in itineraries]
+        if query.min_layover is not None:
+            # The API filter above only guarantees whole-hour granularity, so
+            # it can return connections shorter than what was actually asked
+            # for. Enforce the exact minute threshold here. A direct flight
+            # (min_layover is None) has no connection to violate the minimum,
+            # so it is always kept.
+            offers = [
+                o for o in offers
+                if o.min_layover is None or o.min_layover >= query.min_layover
+            ]
         offers.sort(key=lambda o: o.price)
         return offers

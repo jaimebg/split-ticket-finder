@@ -138,7 +138,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from providers.base import LegQuery
-from providers.kiwi import _booking_url, _minutes, _money, _place_id
+from providers.kiwi import _booking_url, _minutes, _money, _place_id, _require
 
 
 def test_place_id_is_derived_not_looked_up():
@@ -297,3 +297,75 @@ async def test_search_leg_sends_the_date_as_a_full_day_window(kiwi_fixture):
     assert itin["outboundDepartureDate"] == {
         "start": "2026-10-06T00:00:00", "end": "2026-10-06T23:59:59",
     }
+
+
+# ── Layover threshold enforcement (fix round 1, finding 1) ──────────────────
+#
+# filter.stopoverTime only has hour granularity, so the API can return
+# connections shorter than what was asked for (e.g. min_layover=90 sends
+# start=1, which admits 60-89 minute connections too). search_leg must
+# enforce the exact minute threshold itself, after mapping.
+
+
+async def test_search_leg_drops_offers_under_the_exact_minute_threshold(kiwi_fixture):
+    """The API filter only guarantees whole hours; search_leg enforces minutes.
+
+    The fixture holds three itineraries with min_layover 100, 125 and 80
+    minutes (prices 552, 566, 573 respectively).
+    """
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    kept = await _provider(handler).search_leg(LegQuery(
+        origin="MAD", dest="NRT", date="2026-10-06", min_layover=90,
+    ))
+    # The 80-minute connection is dropped; the 100- and 125-minute ones stay.
+    assert [o.min_layover for o in kept] == [100, 125]
+    assert all(o.min_layover >= 90 for o in kept)
+
+    dropped = await _provider(handler).search_leg(LegQuery(
+        origin="MAD", dest="NRT", date="2026-10-06", min_layover=200,
+    ))
+    assert dropped == []
+
+
+async def test_search_leg_keeps_direct_flights_regardless_of_min_layover(kiwi_fixture):
+    """A direct flight has no connection, so it trivially satisfies any minimum."""
+    payload = kiwi_fixture("oneway_lpa_mad")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    offers = await _provider(handler).search_leg(LegQuery(
+        origin="LPA", dest="MAD", date="2026-10-06", min_layover=180,
+    ))
+    assert len(offers) == 5
+    assert all(o.min_layover is None for o in offers)
+
+
+# ── Broken vs. empty (fix round 1, finding 2) ────────────────────────────────
+#
+# "Empty list means no flights, exception means broken" is the whole point of
+# this error taxonomy. These two tests cover the raise paths that were
+# previously untested: a missing (not merely empty) itineraries key, and
+# _require's own guard.
+
+
+async def test_search_leg_raises_when_itineraries_key_is_entirely_missing():
+    """Missing itineraries is a schema change, not an empty result -- must raise."""
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"onewayItineraries": {"__typename": "Itineraries"}}
+        })
+
+    with pytest.raises(ProviderParseError):
+        await _provider(handler).search_leg(
+            LegQuery(origin="LPA", dest="ZZZ", date="2026-10-06")
+        )
+
+
+def test_require_raises_and_names_the_missing_path():
+    with pytest.raises(ProviderParseError, match=r"sector\.sectorSegments"):
+        _require({"sector": {}}, "sector", "sectorSegments")
