@@ -135,7 +135,7 @@ def _local_time(raw) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(raw)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -288,13 +288,27 @@ class KiwiProvider:
                 carrier=code,
                 carrier_name=carrier.get("name") or code,
                 flight_no=f"{code}{seg.get('code') or ''}",
-                duration=_minutes(seg.get("duration") or 0),
+                duration=_minutes(_require(seg, "duration")),
                 dep_local=_local_time((seg.get("source") or {}).get("localTime")),
                 arr_local=_local_time((seg.get("destination") or {}).get("localTime")),
             ))
             layover = entry.get("layover")
             if layover and layover.get("duration") is not None:
                 layovers.append(_minutes(layover["duration"]))
+
+        # A sectorSegment's layover sits between it and the segment before it,
+        # so the first entry structurally has none and every later one must.
+        # A layover shaped {} or {"duration": null} is otherwise silently
+        # skipped above, which would let min_layover fall back to None --
+        # which the filter in search_leg reads as "direct flight" -- on what
+        # may actually be a multi-stop self-transfer. Catching the count
+        # mismatch here turns that schema drift into a loud failure instead of
+        # a quietly-wrong "this connection is fine" answer.
+        if len(layovers) != len(segments) - 1:
+            raise ProviderParseError(
+                f"layover count mismatch for {query.origin}->{query.dest}: "
+                f"{len(segments)} segments but {len(layovers)} usable layovers"
+            )
 
         bags = raw.get("bagsInfo") or {}
         tiers = bags.get("checkedBagTiers") or []
@@ -312,7 +326,7 @@ class KiwiProvider:
             currency=query.currency.upper(),
             airlines=list(dict.fromkeys(s.carrier_name for s in segments)),
             stops=max(0, len(segments) - 1),
-            duration=_minutes(raw.get("duration") or 0),
+            duration=_minutes(_require(raw, "duration")),
             segments=segments,
             provider=self.name,
             booking_url=booking_url,
@@ -320,7 +334,7 @@ class KiwiProvider:
             included_checked_bags=bags.get("includedCheckedBags"),
             checked_bag_price=checked_bag_price,
             min_layover=min(layovers) if layovers else None,
-            pnr_count=raw.get("pnrCount"),
+            pnr_count=_require(raw, "pnrCount"),
         )
 
     async def price_calendar(self, query: CalendarQuery) -> dict[str, RatedPrice]:
@@ -378,6 +392,19 @@ class KiwiProvider:
         return prices
 
     async def search_leg(self, query: LegQuery) -> list[Offer]:
+        """Return offers for one leg, cheapest first.
+
+        Two contract terms Layer 2 needs and would otherwise get wrong:
+
+          - This may return FEWER than query.limit offers even when more exist.
+            The server-side filter.limit caps how many itineraries the API
+            sends back *before* the client-side exact min_layover filter below
+            runs, so callers that need N confirmed results after filtering
+            must over-request.
+          - The minute-exact min_layover threshold is enforced here, client
+            side, because filter.stopoverTime only has hour granularity on the
+            API itself (see _leg_filter).
+        """
         variables = {
             "search": {
                 "itinerary": {
@@ -408,11 +435,15 @@ class KiwiProvider:
             # The API filter above only guarantees whole-hour granularity, so
             # it can return connections shorter than what was actually asked
             # for. Enforce the exact minute threshold here. A direct flight
-            # (min_layover is None) has no connection to violate the minimum,
-            # so it is always kept.
+            # (stops == 0) is exempt because it has no connection to measure --
+            # that is what makes it exempt, not the mere absence of a
+            # min_layover value. Keying the exemption on "min_layover is None"
+            # instead would read any offer with an unmeasurable connection as
+            # a direct flight and wave it through unfiltered.
             offers = [
                 o for o in offers
-                if o.min_layover is None or o.min_layover >= query.min_layover
+                if o.stops == 0
+                or (o.min_layover is not None and o.min_layover >= query.min_layover)
             ]
         offers.sort(key=lambda o: o.price)
         return offers

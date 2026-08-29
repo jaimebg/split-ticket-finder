@@ -1,11 +1,29 @@
 """Tests for the Kiwi GraphQL client, against recorded responses."""
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
+
 import httpx
 import pytest
 
-from providers.base import ProviderFetchError, ProviderParseError
-from providers.kiwi import KiwiProvider
+from providers.base import (
+    CalendarQuery,
+    LegQuery,
+    Place,
+    ProviderFetchError,
+    ProviderParseError,
+    SupportsCalendar,
+    SupportsPlaces,
+)
+from providers.kiwi import (
+    KiwiProvider,
+    _booking_url,
+    _minutes,
+    _money,
+    _place_id,
+    _require,
+)
 
 
 def _provider(handler) -> KiwiProvider:
@@ -133,12 +151,6 @@ async def test_operation_name_travels_as_the_feature_name_query_param(kiwi_fixtu
 
 
 # ── Leg search ───────────────────────────────────────────────────────────────
-
-from datetime import datetime
-from decimal import Decimal
-
-from providers.base import LegQuery
-from providers.kiwi import _booking_url, _minutes, _money, _place_id, _require
 
 
 def test_place_id_is_derived_not_looked_up():
@@ -345,6 +357,34 @@ async def test_search_leg_keeps_direct_flights_regardless_of_min_layover(kiwi_fi
     assert all(o.min_layover is None for o in offers)
 
 
+# ── Layover shape invariant (fix round 2, finding 2) ────────────────────────
+#
+# A layover shaped {} or {"duration": null} is silently skipped when building
+# `layovers`, so a fully-degraded set of layovers would leave min_layover as
+# None -- which the filter above would then read as "direct flight" and keep,
+# letting a multi-stop self-transfer straight through a min_layover request.
+# _to_offer must instead notice the count mismatch (len(layovers) must equal
+# len(segments) - 1) and raise, rather than let the filter be silently
+# disabled by degraded data.
+
+
+async def test_search_leg_raises_when_every_layover_is_malformed(kiwi_fixture):
+    """All layovers shaped {"duration": null} must raise, not silently pass the filter."""
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+    itinerary = payload["data"]["onewayItineraries"]["itineraries"][0]
+    for entry in itinerary["sector"]["sectorSegments"]:
+        if entry.get("layover") is not None:
+            entry["layover"] = {"duration": None}
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(ProviderParseError, match="layover count mismatch"):
+        await _provider(handler).search_leg(LegQuery(
+            origin="MAD", dest="NRT", date="2026-10-06", min_layover=180,
+        ))
+
+
 # ── Broken vs. empty (fix round 1, finding 2) ────────────────────────────────
 #
 # "Empty list means no flights, exception means broken" is the whole point of
@@ -372,8 +412,6 @@ def test_require_raises_and_names_the_missing_path():
 
 
 # ── Price calendar ───────────────────────────────────────────────────────────
-
-from providers.base import CalendarQuery, SupportsCalendar
 
 
 def test_kiwi_advertises_the_calendar_capability():
@@ -482,8 +520,6 @@ async def test_price_calendar_raises_when_calendar_key_is_entirely_missing():
 
 # ── Place search ─────────────────────────────────────────────────────────────
 
-from providers.base import Place, SupportsPlaces
-
 
 def test_kiwi_advertises_the_places_capability():
     assert isinstance(KiwiProvider(), SupportsPlaces)
@@ -523,6 +559,23 @@ async def test_resolve_place_returns_empty_for_no_match():
         })
 
     assert await _provider(handler).resolve_place("qqqqqq") == []
+
+
+async def test_resolve_place_raises_when_edges_key_is_entirely_missing():
+    """Missing edges (not merely empty) is a schema change, not an empty result.
+
+    The equivalents for onewayItineraries and itineraryPricesCalendar are
+    test_search_leg_raises_when_itineraries_key_is_entirely_missing and
+    test_price_calendar_raises_when_calendar_key_is_entirely_missing; this is
+    the third instance of the same pattern for `places`.
+    """
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"places": {"__typename": "PlaceConnection"}}
+        })
+
+    with pytest.raises(ProviderParseError):
+        await _provider(handler).resolve_place("Tokyo")
 
 
 async def test_resolve_place_passes_term_and_limit(kiwi_fixture):
