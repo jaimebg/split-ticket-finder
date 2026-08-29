@@ -445,3 +445,36 @@ async def test_price_calendar_tolerates_a_day_with_no_price(kiwi_fixture):
     )
     assert len(prices) == 29
     assert "2026-10-01" not in prices
+
+
+async def test_price_calendar_raises_when_a_priced_day_has_no_date(kiwi_fixture):
+    """A priced day with no date is broken data, not a normal absence -- it must raise.
+
+    Contrast with test_price_calendar_tolerates_a_day_with_no_price above: a
+    missing *price* is a normal absence and is skipped silently, but a real
+    price with no date can't be keyed at all, so silently dropping it would
+    lose a priced day from the calendar.
+    """
+    payload = kiwi_fixture("calendar_lpa_mad")
+    payload["data"]["itineraryPricesCalendar"]["calendar"][0]["date"] = None
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    with pytest.raises(ProviderParseError):
+        await _provider(handler).price_calendar(
+            CalendarQuery(origin="LPA", dest="MAD", start="2026-10-01", end="2026-10-31")
+        )
+
+
+async def test_price_calendar_raises_when_calendar_key_is_entirely_missing():
+    """Missing calendar (not merely empty) is a schema change, not an empty result."""
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"itineraryPricesCalendar": {"__typename": "ItineraryPricesCalendar"}}
+        })
+
+    with pytest.raises(ProviderParseError):
+        await _provider(handler).price_calendar(
+            CalendarQuery(origin="LPA", dest="ZZZ", start="2026-10-01", end="2026-10-05")
+        )

@@ -349,8 +349,17 @@ class KiwiProvider:
         for item in calendar:
             rated = item.get("ratedPrice")
             if not rated:
+                # No price means no flights that day -- a normal absence.
                 continue
-            raw_date = item.get("date") or ""
+            raw_date = item.get("date")
+            if not isinstance(raw_date, str) or not raw_date:
+                # A priced day with no date is broken data, not an absence --
+                # silently keying it under "" would drop (or overwrite) a real
+                # price rather than reporting the corruption.
+                raise ProviderParseError(
+                    f"PricesCalendar: priced day with no date "
+                    f"({query.origin}->{query.dest}, {query.start}..{query.end})"
+                )
             prices[raw_date[:10]] = RatedPrice(
                 price=_money(_require(rated, "price", "amount")),
                 rating=rated.get("rating") or "UNKNOWN",
@@ -379,7 +388,10 @@ class KiwiProvider:
         )
         itineraries = node.get("itineraries")
         if itineraries is None:
-            raise ProviderParseError("OnewayItineraries: response carries no itineraries")
+            raise ProviderParseError(
+                f"OnewayItineraries: response carries no itineraries "
+                f"({query.origin}->{query.dest}, {query.date})"
+            )
         offers = [self._to_offer(raw, query) for raw in itineraries]
         if query.min_layover is not None:
             # The API filter above only guarantees whole-hour granularity, so
