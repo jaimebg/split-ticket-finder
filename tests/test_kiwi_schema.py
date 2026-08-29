@@ -18,6 +18,7 @@ pytestmark = pytest.mark.network
 # Every type we read from, and the fields we read off it.
 EXPECTED = {
     "RootQuery": {"onewayItineraries", "itineraryPricesCalendar", "places"},
+    "AppError": {"message"},
     "ItineraryOneWay": {
         "id", "duration", "pnrCount", "price", "provider",
         "bagsInfo", "bookingOptions", "sector",
@@ -99,3 +100,81 @@ def test_a_real_calendar_request_still_returns_prices():
     assert node is not None, "calendar query returned no data"
     assert node.get("__typename") == "ItineraryPricesCalendar", node
     assert node["calendar"], "calendar came back empty for a route that has flights"
+
+
+def test_a_real_oneway_request_still_returns_itineraries():
+    """End-to-end smoke test for search_leg's query.
+
+    The field-level introspection above only covers output types. Every input
+    type SearchOnewayInput/ItinerariesFilterInput/ItinerariesOptionsInput
+    declare is otherwise unguarded, and a removed input field breaks the whole
+    query -- taking search_leg fully dark -- rather than just one field of the
+    response. Firing the real query end to end catches that far more cheaply
+    than introspecting input types (which would need `inputFields`, not
+    `fields`). This also exercises stopoverTime and excludeCarriers, which
+    carry the hours filter and the design's named single point of breakage
+    (options.partner) respectively.
+    """
+    from datetime import date, timedelta
+
+    from providers.kiwi import ONEWAY_QUERY
+
+    travel_date = date.today() + timedelta(days=30)
+    variables = {
+        "search": {
+            "itinerary": {
+                "source": {"ids": ["Station:airport:LPA"]},
+                "destination": {"ids": ["Station:airport:MAD"]},
+                "outboundDepartureDate": {
+                    "start": f"{travel_date}T00:00:00",
+                    "end": f"{travel_date}T23:59:59",
+                },
+            },
+            "passengers": {"adults": 1, "children": 0},
+            "cabinClass": {"cabinClass": "ECONOMY"},
+        },
+        "filter": {
+            "limit": 5,
+            "transportTypes": ["FLIGHT"],
+            "maxStopsCount": 3,
+            "stopoverTime": {"start": 1, "end": 48},
+            "excludeCarriers": ["ZZ"],
+        },
+        "options": {
+            "partner": "skypicker", "currency": "eur", "locale": "en", "sortBy": "PRICE",
+        },
+    }
+    with httpx.Client(headers=HEADERS, timeout=30.0) as client:
+        response = client.post(
+            f"{ENDPOINT}?featureName=DriftGuard",
+            json={"query": ONEWAY_QUERY, "variables": variables},
+        )
+    node = (response.json().get("data") or {}).get("onewayItineraries")
+    assert node is not None, "oneway query returned no data"
+    assert node.get("__typename") == "Itineraries", node
+    assert node["itineraries"], "itineraries came back empty for a route that has flights"
+
+
+def test_a_real_places_request_still_returns_airports():
+    """End-to-end smoke test for resolve_place's query.
+
+    Covers PlacesFilterInput.onlyTypes, unguarded by the field introspection
+    above, the same way the oneway smoke test covers its own inputs.
+    """
+    from providers.kiwi import PLACES_QUERY
+
+    variables = {
+        "search": {"term": "Tokyo"},
+        "filter": {"onlyTypes": ["AIRPORT"]},
+        "options": {"locale": "en"},
+        "first": 5,
+    }
+    with httpx.Client(headers=HEADERS, timeout=30.0) as client:
+        response = client.post(
+            f"{ENDPOINT}?featureName=DriftGuard",
+            json={"query": PLACES_QUERY, "variables": variables},
+        )
+    node = (response.json().get("data") or {}).get("places")
+    assert node is not None, "places query returned no data"
+    assert node.get("__typename") == "PlaceConnection", node
+    assert node["edges"], "places came back empty for a well-known city"
