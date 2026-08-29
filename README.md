@@ -168,7 +168,7 @@ handlers/
   favorites.py          track / list / untrack routes
   history.py            view and re-run past searches
   utils.py              validation, HTML escaping, message chunking
-tests/                  136 offline tests, plus a network-marked drift guard run separately
+tests/                  the full suite runs offline; a network-marked drift guard runs separately
 ```
 
 ### Notes on some decisions
