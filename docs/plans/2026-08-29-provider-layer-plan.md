@@ -19,6 +19,8 @@
 - **`None` means "this provider cannot tell you". It never means zero.** (spec §4.3)
 - **Empty list means "no flights"; an exception means "broken".** Never collapse the two. (spec §4.5)
 - **Line length 100**, ruff config already in `pyproject.toml`. Run `ruff check .` before every commit.
+- **Never add `# noqa: E402` in a test file.** `pyproject.toml` already ignores E402 under `tests/*`, so the directive is itself an error (`RUF100`, and `RUF` is selected). Mid-file imports in tests need no suppression at all.
+- **Use the venv:** `.venv/bin/pytest` and `.venv/bin/ruff`, already created with `pip install -e ".[dev]"`.
 - Existing behaviour must not regress: `pytest` stays green at every commit.
 
 ---
@@ -99,6 +101,8 @@ from models import Route, add_days, fmt_dur, generate_dates  # noqa: F401
 
 The `noqa` is deliberate and temporary — `scraper.py` no longer uses these itself, but re-exporting keeps every existing importer working until Task 3 moves the file. Task 3 deletes this line.
 
+Then **delete `from datetime import datetime, timedelta` from `scraper.py`**. Only `generate_dates` and `add_days` used it, and both just left; leaving it is an `F401` failure. Task 3 adds it back when `_build_times` needs it. Everything else in the import block (`asyncio`, `base64`, `json`, `logging`, `random`, `re`, `dataclass`, `field`, `httpx`) is still in use by `FlightResult`, the encoder, the parser or the fetcher — leave those alone.
+
 - [ ] **Step 3: Run the full suite to prove nothing changed**
 
 Run: `pytest`
@@ -148,6 +152,7 @@ Create `tests/test_providers_base.py`:
 """Tests for the provider-agnostic types and capability protocols."""
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime
 from decimal import Decimal
 
@@ -264,7 +269,7 @@ def test_capability_protocols_are_detectable_at_runtime():
 def test_offer_is_frozen():
     offer = Offer(price=Decimal("29"), currency="EUR", airlines=[], stops=0,
                   duration=170, segments=[], provider="kiwi")
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         offer.price = Decimal("1")
 ```
 
@@ -749,7 +754,14 @@ class GoogleProvider:
             self._client = None
 ```
 
-Add `from decimal import Decimal` and `from providers.base import LegQuery, Offer, Segment` to the file's imports. `datetime` and `timedelta` are already imported.
+Add these to the file's imports — `datetime`/`timedelta` were removed in Task 1 once nothing used them, and `_build_times` needs them back:
+
+```python
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+from providers.base import LegQuery, Offer, Segment
+```
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -1175,11 +1187,11 @@ Append to `tests/test_kiwi_provider.py`:
 ```python
 # ── Leg search ───────────────────────────────────────────────────────────────
 
-from datetime import datetime          # noqa: E402
-from decimal import Decimal            # noqa: E402
+from datetime import datetime
+from decimal import Decimal
 
-from providers.base import LegQuery    # noqa: E402
-from providers.kiwi import _minutes, _money, _booking_url, _place_id  # noqa: E402
+from providers.base import LegQuery
+from providers.kiwi import _booking_url, _minutes, _money, _place_id
 
 
 def test_place_id_is_derived_not_looked_up():
@@ -1569,7 +1581,7 @@ Append to `tests/test_kiwi_provider.py`:
 ```python
 # ── Price calendar ───────────────────────────────────────────────────────────
 
-from providers.base import CalendarQuery, SupportsCalendar   # noqa: E402
+from providers.base import CalendarQuery, SupportsCalendar
 
 
 def test_kiwi_advertises_the_calendar_capability():
@@ -1754,7 +1766,7 @@ Append to `tests/test_kiwi_provider.py`:
 ```python
 # ── Place search ─────────────────────────────────────────────────────────────
 
-from providers.base import Place, SupportsPlaces      # noqa: E402
+from providers.base import Place, SupportsPlaces
 
 
 def test_kiwi_advertises_the_places_capability():

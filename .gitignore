@@ -12,3 +12,6 @@ venv/
 *.egg-info/
 .idea/
 .vscode/
+
+# SDD scratch workspace
+.superpowers/
