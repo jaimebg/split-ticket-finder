@@ -49,6 +49,47 @@ def test_only_kiwi_advertises_calendar_support():
     assert not isinstance(registry.get_provider("google"), SupportsCalendar)
 
 
+async def test_close_all_closes_providers_and_clears_instances_for_rebuild():
+    """close_all() must both reach every provider's aclose() and clear
+    _INSTANCES.
+
+    Clearing connections but leaving stale instances behind would hand a dead
+    client to the next get_provider() call after a shutdown/restart cycle
+    within one process, so both effects are checked independently.
+    """
+    # Closing an already-empty registry is a no-op: no exception, nothing to
+    # clear.
+    await registry.close_all()
+    assert registry._INSTANCES == {}
+
+    # A stub proves aclose() actually reached it, rather than just assuming
+    # "no exception raised" means the call happened.
+    closed_names = []
+
+    class StubProvider:
+        name = "stub"
+
+        async def search_leg(self, query):
+            raise NotImplementedError
+
+        async def aclose(self):
+            closed_names.append(self.name)
+
+    registry._INSTANCES["stub"] = StubProvider()
+    first_kiwi = registry.get_provider("kiwi")
+
+    await registry.close_all()
+
+    assert closed_names == ["stub"]
+    assert registry._INSTANCES == {}
+
+    # _INSTANCES was cleared, not just emptied of closed connections: a fresh
+    # get_provider() call must rebuild rather than hand back the old (now
+    # closed) instance.
+    second_kiwi = registry.get_provider("kiwi")
+    assert second_kiwi is not first_kiwi
+
+
 # ── Config parsing ───────────────────────────────────────────────────────────
 
 
