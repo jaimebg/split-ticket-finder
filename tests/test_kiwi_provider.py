@@ -130,3 +130,170 @@ async def test_operation_name_travels_as_the_feature_name_query_param(kiwi_fixtu
         "PricesCalendar", "query {}", {}, "itineraryPricesCalendar"
     )
     assert "featureName=PricesCalendar" in seen["url"]
+
+
+# ── Leg search ───────────────────────────────────────────────────────────────
+
+from datetime import datetime
+from decimal import Decimal
+
+from providers.base import LegQuery
+from providers.kiwi import _booking_url, _minutes, _money, _place_id
+
+
+def test_place_id_is_derived_not_looked_up():
+    assert _place_id("lpa") == "Station:airport:LPA"
+
+
+def test_money_parses_strings_to_decimal():
+    assert _money("174.303303") == Decimal("174.303303")
+    assert _money("29") == Decimal("29")
+
+
+def test_money_rejects_junk_loudly():
+    with pytest.raises(ProviderParseError):
+        _money("not-a-price")
+    with pytest.raises(ProviderParseError):
+        _money(None)
+
+
+def test_minutes_converts_from_seconds():
+    """Kiwi reports every duration in seconds; the rest of the app uses minutes."""
+    assert _minutes(10200) == 170
+    assert _minutes(0) == 0
+
+
+def test_booking_url_is_absolutised():
+    assert _booking_url("/en/booking/?x=1") == "https://www.kiwi.com/en/booking/?x=1"
+    assert _booking_url("https://www.kiwi.com/en/booking/?x=1") == (
+        "https://www.kiwi.com/en/booking/?x=1"
+    )
+    assert _booking_url(None) is None
+    assert _booking_url("") is None
+
+
+async def test_search_leg_maps_a_direct_flight(kiwi_fixture):
+    payload = kiwi_fixture("oneway_lpa_mad")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    offers = await _provider(handler).search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06")
+    )
+
+    assert len(offers) == 5
+    assert [o.price for o in offers] == [Decimal(x) for x in ("29", "41", "43", "44", "45")]
+
+    first = offers[0]
+    assert first.provider == "kiwi"
+    assert first.currency == "EUR"
+    assert first.duration == 170                     # 10200 seconds
+    assert first.stops == 0
+    assert first.pnr_count == 1
+    assert first.airlines == ["Ryanair"]
+    assert first.booking_url.startswith("https://www.kiwi.com/en/booking/")
+    # A direct flight has no connection to measure.
+    assert first.min_layover is None
+
+    seg = first.segments[0]
+    assert (seg.origin, seg.dest) == ("LPA", "MAD")
+    assert seg.carrier == "FR"
+    assert seg.carrier_name == "Ryanair"
+    assert seg.flight_no == "FR2012"
+    assert seg.dep_local == datetime(2026, 10, 6, 8, 30)
+    assert seg.arr_local == datetime(2026, 10, 6, 12, 20)
+
+
+async def test_search_leg_reports_baggage_as_known_zero_not_unknown(kiwi_fixture):
+    """Kiwi CAN report baggage, so 0 included bags is a fact, not a gap."""
+    payload = kiwi_fixture("oneway_lpa_mad")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06")
+    ))[0]
+
+    assert first.included_checked_bags == 0
+    assert first.included_cabin_bags == 0
+    assert first.checked_bag_price == Decimal("34.99")   # cheapest tier
+
+
+async def test_search_leg_maps_a_multi_segment_self_transfer(kiwi_fixture):
+    """Four segments, three separate bookings, three layovers."""
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="MAD", dest="NRT", date="2026-10-06")
+    ))[0]
+
+    assert first.price == Decimal("552")
+    assert len(first.segments) == 4
+    assert first.stops == 3
+    assert first.pnr_count == 3
+    assert first.min_layover == 100                  # 6000 seconds, the shortest
+    assert first.checked_bag_price == Decimal("174.303303")
+    assert [s.origin for s in first.segments] == ["MAD", "AUH", "KUL", "KHH"]
+    assert first.segments[-1].dest == "NRT"
+
+
+async def test_search_leg_returns_empty_list_when_there_are_no_itineraries():
+    """No flights is a normal outcome and must not raise."""
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"onewayItineraries": {"__typename": "Itineraries", "itineraries": []}}
+        })
+
+    offers = await _provider(handler).search_leg(
+        LegQuery(origin="LPA", dest="ZZZ", date="2026-10-06")
+    )
+    assert offers == []
+
+
+async def test_search_leg_sends_filters_with_stopover_time_in_hours(kiwi_fixture):
+    """stopoverTime is in HOURS. Seconds or minutes silently return nothing."""
+    seen = {}
+    payload = kiwi_fixture("oneway_lpa_mad")
+
+    def handler(request):
+        import json as _json
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json=payload)
+
+    await _provider(handler).search_leg(LegQuery(
+        origin="LPA", dest="MAD", date="2026-10-06",
+        limit=3, max_stops=1, min_layover=180, exclude_carriers=("EY", "AK"),
+    ))
+
+    flt = seen["body"]["variables"]["filter"]
+    assert flt["limit"] == 3
+    assert flt["maxStopsCount"] == 1
+    assert flt["stopoverTime"]["start"] == 3          # 180 minutes -> 3 hours
+    assert flt["excludeCarriers"] == ["EY", "AK"]
+    assert flt["transportTypes"] == ["FLIGHT"]
+
+
+async def test_search_leg_sends_the_date_as_a_full_day_window(kiwi_fixture):
+    seen = {}
+    payload = kiwi_fixture("oneway_lpa_mad")
+
+    def handler(request):
+        import json as _json
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json=payload)
+
+    await _provider(handler).search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06")
+    )
+
+    itin = seen["body"]["variables"]["search"]["itinerary"]
+    assert itin["source"]["ids"] == ["Station:airport:LPA"]
+    assert itin["destination"]["ids"] == ["Station:airport:MAD"]
+    assert itin["outboundDepartureDate"] == {
+        "start": "2026-10-06T00:00:00", "end": "2026-10-06T23:59:59",
+    }
