@@ -12,7 +12,7 @@ from config import (
     MAX_CONCURRENCY,
 )
 from models import Route, add_days, fmt_dur
-from scraper import (
+from providers.google import (
     FetchError,
     FlightResult,
     ParseError,

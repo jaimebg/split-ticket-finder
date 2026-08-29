@@ -6,7 +6,7 @@ import base64
 import pytest
 
 from models import fmt_dur, generate_dates
-from scraper import (
+from providers.google import (
     FlightResult,
     ParseError,
     _varint,

@@ -14,7 +14,7 @@ from config import (
 )
 from db import add_price_check, get_favorites, update_favorite_price
 from models import add_days
-from scraper import FetchError, ParseError, search
+from providers.google import FetchError, ParseError, search
 
 logger = logging.getLogger(__name__)
 

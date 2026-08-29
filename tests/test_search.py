@@ -7,7 +7,7 @@ import pytest
 
 import search as search_module
 from models import Route, add_days
-from scraper import FetchError, FlightResult, ParseError
+from providers.google import FetchError, FlightResult, ParseError
 from search import format_results, routes_to_json, run_search
 
 

@@ -7,16 +7,24 @@ import logging
 import random
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from decimal import Decimal
 
 import httpx
 
 from config import MAX_RETRIES, REQUEST_TIMEOUT, SOCS_COOKIE
-from models import Route, add_days, fmt_dur, generate_dates  # noqa: F401
+from providers.base import (
+    LegQuery,
+    Offer,
+    ProviderFetchError,
+    ProviderParseError,
+    Segment,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class ParseError(RuntimeError):
+class ParseError(ProviderParseError):
     """Raised when a response could not be parsed as a flight listing.
 
     Distinguishes "Google returned something we don't understand" (layout
@@ -25,7 +33,7 @@ class ParseError(RuntimeError):
     """
 
 
-class FetchError(RuntimeError):
+class FetchError(ProviderFetchError):
     """Raised when the HTTP request failed after exhausting retries."""
 
 
@@ -307,3 +315,111 @@ async def search(
         from_apt, to_apt, date, adults, currency, return_date=return_date, client=client
     )
     return parse_flights(html)
+
+
+# ============================================================
+# Provider adapter
+# ============================================================
+
+def _build_times(date, raw_segments):
+    """Attach dates to Google's bare [hour, minute] pairs.
+
+    Google reports clock times with no date attached. Time only ever moves
+    forward within one itinerary, so whenever a clock time is earlier than the
+    one before it the itinerary has crossed midnight and the day advances.
+    Returns one (departure, arrival) tuple per segment, with None where the
+    payload had nothing usable.
+    """
+    cursor = datetime.strptime(date, "%Y-%m-%d")
+    out = []
+    for seg in raw_segments:
+        pair = []
+        for key in ("dep_time", "arr_time"):
+            hm = seg.get(key)
+            if not (
+                isinstance(hm, list)
+                and len(hm) >= 2
+                and isinstance(hm[0], int)
+                and isinstance(hm[1], int)
+            ):
+                pair.append(None)
+                continue
+            try:
+                candidate = cursor.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+            except ValueError:
+                pair.append(None)
+                continue
+            if candidate < cursor:
+                candidate += timedelta(days=1)
+            cursor = candidate
+            pair.append(candidate)
+        out.append((pair[0], pair[1]))
+    return out
+
+
+def _to_offer(flight, query: LegQuery) -> Offer:
+    """Map one parsed FlightResult onto the shared Offer type."""
+    times = _build_times(query.date, flight.segments)
+    segments = []
+    for raw, (dep, arr) in zip(flight.segments, times, strict=True):
+        flight_no = raw.get("flight") or ""
+        carrier = flight_no[:2] if len(flight_no) >= 2 else ""
+        segments.append(Segment(
+            origin=raw.get("from", "?"),
+            dest=raw.get("to", "?"),
+            carrier=carrier,
+            carrier_name=carrier,
+            flight_no=flight_no,
+            duration=int(raw.get("duration") or 0),
+            dep_local=dep,
+            arr_local=arr,
+        ))
+
+    return Offer(
+        price=Decimal(str(flight.price)),
+        currency=query.currency,
+        airlines=list(flight.airlines),
+        stops=flight.stops,
+        duration=flight.duration,
+        segments=segments,
+        provider="google",
+        # Everything below is structurally absent from Google's payload.
+        # None means "unknown", and the formatter must say so.
+    )
+
+
+class GoogleProvider:
+    """Google Flights behind the shared provider interface.
+
+    Implements FlightProvider only: Google exposes no price calendar and no
+    place search, which is exactly why those are separate protocols.
+    """
+
+    name = "google"
+
+    def __init__(self, client: httpx.AsyncClient | None = None):
+        self._client = client
+        self._owns_client = client is None
+
+    async def _get_client(self):
+        if self._client is None:
+            self._client = build_client()
+        return self._client
+
+    async def search_leg(self, query: LegQuery) -> list[Offer]:
+        client = await self._get_client()
+        html = await fetch_html(
+            query.origin,
+            query.dest,
+            query.date,
+            query.adults,
+            query.currency,
+            client=client,
+        )
+        flights = parse_flights(html)
+        return [_to_offer(f, query) for f in flights[: query.limit]]
+
+    async def aclose(self):
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+            self._client = None
