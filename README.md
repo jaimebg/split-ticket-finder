@@ -209,13 +209,15 @@ total, and reporting it as a price drop on every cycle.
 ```bash
 pip install -e ".[dev]"
 
-pytest              # 71 tests, all offline
+pytest              # offline tests only
+pytest -m network   # drift guard: checks the live Kiwi schema
 ruff check .        # lint
 ```
 
-The parser is pinned against a trimmed capture of a real Google Flights response
-(`tests/fixtures/`), so the array-index layout it depends on is covered by tests
-without any test needing network access.
+The parser depends on undocumented response shapes from both sources. The
+Google parser is pinned against a recorded HTML capture; the Kiwi client is
+pinned against recorded JSON, plus a network-marked drift guard that
+introspects the live schema and fails if a field the client reads has moved.
 
 ## Limitations
 
