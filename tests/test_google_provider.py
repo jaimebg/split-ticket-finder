@@ -4,8 +4,10 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from providers.base import LegQuery, Offer
-from providers.google import GoogleProvider, _build_times
+import pytest
+
+from providers.base import LegQuery, Offer, ProviderError
+from providers.google import FlightResult, GoogleProvider, _build_times
 
 
 def test_provider_name():
@@ -84,3 +86,84 @@ async def test_search_leg_respects_limit(real_html, monkeypatch):
         LegQuery(origin="LPA", dest="MAD", date="2026-10-06", limit=1)
     )
     assert len(offers) == 1
+
+
+# ── Unsupported LegQuery fields (fix round 2, finding 1) ────────────────────
+#
+# Google honours max_stops and exclude_carriers client-side, and must raise
+# rather than silently ignore or approximate children, non-ECONOMY cabin, and
+# min_layover -- the query would otherwise mean something different depending
+# on which provider answered it.
+
+
+async def test_search_leg_drops_offers_exceeding_max_stops(monkeypatch):
+    """max_stops is enforced client-side, before the limit slice."""
+    import providers.google as google
+
+    direct = FlightResult(
+        price=100, airlines=["Iberia"], stops=0, duration=120,
+        segments=[{
+            "from": "LPA", "to": "MAD", "flight": "IB1234",
+            "dep_time": [8, 0], "arr_time": [10, 0],
+        }],
+    )
+    connecting = FlightResult(
+        price=90, airlines=["Vueling"], stops=1, duration=300,
+        segments=[
+            {"from": "LPA", "to": "BCN", "flight": "VY1111",
+             "dep_time": [8, 0], "arr_time": [10, 0]},
+            {"from": "BCN", "to": "MAD", "flight": "VY2222",
+             "dep_time": [12, 0], "arr_time": [13, 0]},
+        ],
+    )
+
+    async def fake_fetch(*args, **kwargs):
+        return "<html></html>"
+
+    monkeypatch.setattr(google, "fetch_html", fake_fetch)
+    monkeypatch.setattr(google, "parse_flights", lambda html: [connecting, direct])
+
+    offers = await GoogleProvider().search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06", max_stops=0)
+    )
+    assert len(offers) == 1
+    assert offers[0].stops == 0
+
+
+async def test_search_leg_drops_offers_by_excluded_carrier(real_html, monkeypatch):
+    """exclude_carriers matches Segment.carrier case-insensitively."""
+    import providers.google as google
+
+    async def fake_fetch(*args, **kwargs):
+        return real_html
+
+    monkeypatch.setattr(google, "fetch_html", fake_fetch)
+    offers = await GoogleProvider().search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06", exclude_carriers=("fr",))
+    )
+    assert len(offers) == 2
+    assert all(s.carrier.upper() != "FR" for o in offers for s in o.segments)
+
+
+async def test_search_leg_raises_for_children():
+    """Google cannot express a passenger count with children."""
+    with pytest.raises(ProviderError, match="children"):
+        await GoogleProvider().search_leg(
+            LegQuery(origin="LPA", dest="MAD", date="2026-10-06", children=1)
+        )
+
+
+async def test_search_leg_raises_for_non_economy_cabin():
+    """encode_tfs hardcodes economy; a different cabin would be silently wrong."""
+    with pytest.raises(ProviderError, match="BUSINESS"):
+        await GoogleProvider().search_leg(
+            LegQuery(origin="LPA", dest="MAD", date="2026-10-06", cabin="BUSINESS")
+        )
+
+
+async def test_search_leg_raises_for_min_layover():
+    """Google's per-airport local times cannot be differenced across a connection."""
+    with pytest.raises(ProviderError, match="min_layover"):
+        await GoogleProvider().search_leg(
+            LegQuery(origin="LPA", dest="MAD", date="2026-10-06", min_layover=90)
+        )

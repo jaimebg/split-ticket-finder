@@ -44,6 +44,11 @@ class Segment:
     dep_local/arr_local are Optional because providers differ in what they
     report: Kiwi gives full local timestamps, Google gives bare clock times
     that have to be reconstructed against the query date.
+
+    Both are timezone-naive local times at their own airport, not a shared
+    clock. Differencing dep_local/arr_local across two segments of a connection
+    is meaningless -- it silently mixes two timezones. Layover length must come
+    from the provider's own layover data, never be computed from these fields.
     """
 
     origin: str
@@ -66,6 +71,12 @@ class Offer:
 
     min_layover is meaningful only when stops > 0; a direct flight has no
     connection to measure.
+
+    frozen=True only guards attribute reassignment -- it does not make the
+    dataclass hashable (list fields are unhashable) and it does not stop
+    in-place mutation of the airlines/segments lists themselves. Offer cannot
+    go in a set or be a dict key; deduping needs a derived key (e.g. a tuple of
+    the fields that matter), not the Offer itself.
     """
 
     price: Decimal

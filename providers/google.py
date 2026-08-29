@@ -16,6 +16,7 @@ from config import MAX_RETRIES, REQUEST_TIMEOUT, SOCS_COOKIE
 from providers.base import (
     LegQuery,
     Offer,
+    ProviderError,
     ProviderFetchError,
     ProviderParseError,
     Segment,
@@ -329,6 +330,12 @@ def _build_times(date, raw_segments):
     one before it the itinerary has crossed midnight and the day advances.
     Returns one (departure, arrival) tuple per segment, with None where the
     payload had nothing usable.
+
+    "Time only ever moves forward" is a simplification: an eastbound date-line
+    crossing (e.g. NRT -> HNL) can arrive at an earlier clock time the same
+    day, which this heuristic would misread as no day having passed. This is
+    rare on this project's routes and the payload offers no better signal to
+    detect it, so it is a known caveat rather than a handled case.
     """
     cursor = datetime.strptime(date, "%Y-%m-%d")
     out = []
@@ -377,7 +384,7 @@ def _to_offer(flight, query: LegQuery) -> Offer:
 
     return Offer(
         price=Decimal(str(flight.price)),
-        currency=query.currency,
+        currency=query.currency.upper(),
         airlines=list(flight.airlines),
         stops=flight.stops,
         duration=flight.duration,
@@ -393,6 +400,24 @@ class GoogleProvider:
 
     Implements FlightProvider only: Google exposes no price calendar and no
     place search, which is exactly why those are separate protocols.
+
+    Segment.carrier_name holds the IATA carrier code, not a full airline name --
+    Google's per-segment payload has nothing better to offer. Offer.airlines
+    does carry real airline names, read from the top-level flight listing.
+
+    LegQuery has five fields Google cannot honour the way Kiwi does:
+
+      - max_stops and exclude_carriers ARE enforced, but client-side, after
+        mapping and before the `limit` slice, so `limit` keeps meaning "up to
+        this many results I would accept". exclude_carriers compares
+        case-insensitively, since Segment.carrier is derived from the first two
+        characters of the flight number rather than looked up.
+      - children, any cabin other than "ECONOMY", and min_layover raise
+        ProviderError instead of being silently ignored or approximated:
+        encode_tfs hardcodes economy and only ever encodes adults, and
+        min_layover is not computable at all -- Google's timestamps are
+        timezone-naive local times reconstructed per airport, so differencing
+        them across a connection is meaningless.
     """
 
     name = "google"
@@ -407,6 +432,22 @@ class GoogleProvider:
         return self._client
 
     async def search_leg(self, query: LegQuery) -> list[Offer]:
+        if query.children:
+            raise ProviderError(
+                "Google cannot express children: encode_tfs only ever encodes "
+                "adult passengers"
+            )
+        if query.cabin != "ECONOMY":
+            raise ProviderError(
+                f"Google cannot express cabin {query.cabin!r}: encode_tfs hardcodes economy"
+            )
+        if query.min_layover is not None:
+            raise ProviderError(
+                "Google cannot honour min_layover: its timestamps are "
+                "timezone-naive local times reconstructed per airport, so "
+                "differencing them across a connection is meaningless"
+            )
+
         client = await self._get_client()
         html = await fetch_html(
             query.origin,
@@ -417,7 +458,18 @@ class GoogleProvider:
             client=client,
         )
         flights = parse_flights(html)
-        return [_to_offer(f, query) for f in flights[: query.limit]]
+        offers = [_to_offer(f, query) for f in flights]
+
+        if query.max_stops is not None:
+            offers = [o for o in offers if o.stops <= query.max_stops]
+        if query.exclude_carriers:
+            excluded = {c.upper() for c in query.exclude_carriers}
+            offers = [
+                o for o in offers
+                if not any(s.carrier.upper() in excluded for s in o.segments)
+            ]
+
+        return offers[: query.limit]
 
     async def aclose(self):
         if self._client is not None and self._owns_client:
