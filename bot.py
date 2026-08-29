@@ -43,6 +43,14 @@ async def post_init(application: Application) -> None:
     logger.info("Scheduler task created.")
 
 
+async def post_shutdown(application: Application) -> None:
+    """Release provider connection pools on the way out."""
+    from providers.registry import close_all
+
+    await close_all()
+    logger.info("Provider connections closed.")
+
+
 def main() -> None:
     """Build the Application, register handlers, and start polling."""
     try:
@@ -51,7 +59,13 @@ def main() -> None:
         logger.error("%s", exc)
         sys.exit(1)
 
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
     # ── 1. ConversationHandler (search flow) — FIRST for priority ──
     app.add_handler(build_search_conversation())
