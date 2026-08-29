@@ -114,14 +114,17 @@ instead of failing, which is the fallback path required by §5.6.
 ```python
 @dataclass(frozen=True)
 class Segment:
+    # Timestamps are Optional because sources differ: Kiwi gives full local
+    # times, Google gives bare clock times that must be reconstructed against
+    # the query date and can degrade to unknown.
     origin: str            # IATA
     dest: str
     carrier: str           # IATA carrier code
     carrier_name: str
     flight_no: str         # e.g. "FR2012"
-    dep_local: datetime
-    arr_local: datetime
     duration: int          # minutes
+    dep_local: datetime | None = None
+    arr_local: datetime | None = None
 
 @dataclass(frozen=True)
 class Offer:
