@@ -300,6 +300,6 @@ def test_format_output_stays_within_telegram_limits_for_a_large_search():
     assert all(len(c) <= 4096 for c in chunks)
 
 
-def test_add_days_matches_scraper_helper():
+def test_add_days_matches_models_helper():
     assert add_days("2026-09-01", 14) == "2026-09-15"
     assert add_days("2026-12-25", 10) == "2027-01-04"

@@ -49,6 +49,17 @@ def test_only_kiwi_advertises_calendar_support():
     assert not isinstance(registry.get_provider("google"), SupportsCalendar)
 
 
+def test_builders_and_known_providers_stay_in_sync():
+    """These two hand-maintained lists must never drift apart.
+
+    config.KNOWN_PROVIDERS is what validates PROVIDERS/PRIMARY_PROVIDER;
+    registry._BUILDERS is what actually builds one. A name present in one but
+    not the other would let a provider pass config validation but fail to
+    build, or vice versa.
+    """
+    assert set(registry._BUILDERS) == set(config.KNOWN_PROVIDERS)
+
+
 async def test_close_all_closes_providers_and_clears_instances_for_rebuild():
     """close_all() must both reach every provider's aclose() and clear
     _INSTANCES.
