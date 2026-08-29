@@ -1,0 +1,54 @@
+{
+  "data": {
+    "places": {
+      "__typename": "PlaceConnection",
+      "edges": [
+        {
+          "node": {
+            "__typename": "Station",
+            "id": "Station:airport:NRT",
+            "legacyId": "NRT",
+            "name": "Narita International",
+            "code": "NRT",
+            "city": {
+              "name": "Tokyo",
+              "country": {
+                "name": "Japan"
+              }
+            }
+          }
+        },
+        {
+          "node": {
+            "__typename": "Station",
+            "id": "Station:airport:HND",
+            "legacyId": "HND",
+            "name": "Haneda",
+            "code": "HND",
+            "city": {
+              "name": "Tokyo",
+              "country": {
+                "name": "Japan"
+              }
+            }
+          }
+        },
+        {
+          "node": {
+            "__typename": "Station",
+            "id": "Station:airport:TJH",
+            "legacyId": "TJH",
+            "name": "Toyooka",
+            "code": "TJH",
+            "city": {
+              "name": "Hyogo Prefecture",
+              "country": {
+                "name": "Japan"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

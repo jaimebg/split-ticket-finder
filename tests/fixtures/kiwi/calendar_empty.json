@@ -1,0 +1,11 @@
+{
+  "data": {
+    "itineraryPricesCalendar": {
+      "__typename": "ItineraryPricesCalendar",
+      "currency": {
+        "code": "EUR"
+      },
+      "calendar": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "data": {
+    "places": {
+      "__typename": "PlaceConnection",
+      "edges": [
+        {
+          "node": {
+            "__typename": "Station",
+            "id": "Station:airport:LPA",
+            "legacyId": "LPA",
+            "name": "Gran Canaria",
+            "code": "LPA",
+            "city": {
+              "name": "Las Palmas",
+              "country": {
+                "name": "Spain"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
