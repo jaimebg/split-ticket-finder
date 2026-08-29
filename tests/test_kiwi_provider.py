@@ -369,3 +369,79 @@ async def test_search_leg_raises_when_itineraries_key_is_entirely_missing():
 def test_require_raises_and_names_the_missing_path():
     with pytest.raises(ProviderParseError, match=r"sector\.sectorSegments"):
         _require({"sector": {}}, "sector", "sectorSegments")
+
+
+# ── Price calendar ───────────────────────────────────────────────────────────
+
+from providers.base import CalendarQuery, SupportsCalendar
+
+
+def test_kiwi_advertises_the_calendar_capability():
+    assert isinstance(KiwiProvider(), SupportsCalendar)
+
+
+async def test_price_calendar_maps_a_month(kiwi_fixture):
+    payload = kiwi_fixture("calendar_lpa_mad")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    prices = await _provider(handler).price_calendar(
+        CalendarQuery(origin="LPA", dest="MAD", start="2026-10-01", end="2026-10-31")
+    )
+
+    assert len(prices) == 30
+    # Keys are plain dates, not the timestamps the API returns.
+    assert "2026-10-01" in prices
+    assert prices["2026-10-01"].price == Decimal("29")
+    assert prices["2026-10-01"].rating == "AVERAGE"
+    assert all(isinstance(v.price, Decimal) for v in prices.values())
+
+
+async def test_price_calendar_returns_empty_for_an_unknown_airport(kiwi_fixture):
+    """An unknown airport yields an empty calendar, which is data, not an error."""
+    payload = kiwi_fixture("calendar_empty")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    prices = await _provider(handler).price_calendar(
+        CalendarQuery(origin="ZZZ", dest="MAD", start="2026-10-01", end="2026-10-05")
+    )
+    assert prices == {}
+
+
+async def test_price_calendar_sends_a_datetime_window(kiwi_fixture):
+    """Plain YYYY-MM-DD is rejected by the API; it wants DateTime."""
+    seen = {}
+    payload = kiwi_fixture("calendar_lpa_mad")
+
+    def handler(request):
+        import json as _json
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json=payload)
+
+    await _provider(handler).price_calendar(
+        CalendarQuery(origin="LPA", dest="MAD", start="2026-10-01", end="2026-10-31")
+    )
+
+    search = seen["body"]["variables"]["search"]
+    assert search["dates"] == {
+        "start": "2026-10-01T00:00:00", "end": "2026-10-31T00:00:00",
+    }
+    assert search["source"]["ids"] == ["Station:airport:LPA"]
+
+
+async def test_price_calendar_tolerates_a_day_with_no_price(kiwi_fixture):
+    """A null ratedPrice is a day with no flights, so it is simply absent."""
+    payload = kiwi_fixture("calendar_lpa_mad")
+    payload["data"]["itineraryPricesCalendar"]["calendar"][0]["ratedPrice"] = None
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    prices = await _provider(handler).price_calendar(
+        CalendarQuery(origin="LPA", dest="MAD", start="2026-10-01", end="2026-10-31")
+    )
+    assert len(prices) == 29
+    assert "2026-10-01" not in prices

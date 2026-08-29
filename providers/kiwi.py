@@ -28,7 +28,15 @@ from config import (
     MAX_RETRIES,
     REQUEST_TIMEOUT,
 )
-from providers.base import LegQuery, Offer, ProviderFetchError, ProviderParseError, Segment
+from providers.base import (
+    CalendarQuery,
+    LegQuery,
+    Offer,
+    ProviderFetchError,
+    ProviderParseError,
+    RatedPrice,
+    Segment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +74,17 @@ ONEWAY_QUERY = """query OnewayItineraries($search: SearchOnewayInput, $filter: I
           source { station { code name } localTime }
           destination { station { code name } localTime } } } } }
     } }
+  }
+}"""
+
+CALENDAR_QUERY = """query PricesCalendar($search: SearchPricesCalendarInput, $filter: ItinerariesFilterInput, $options: ItinerariesOptionsInput) {
+  itineraryPricesCalendar(search: $search, filter: $filter, options: $options) {
+    __typename
+    ... on AppError { message }
+    ... on ItineraryPricesCalendar {
+      currency { code }
+      calendar { date ratedPrice { price { amount } rating } }
+    }
   }
 }"""
 
@@ -292,6 +311,51 @@ class KiwiProvider:
             min_layover=min(layovers) if layovers else None,
             pnr_count=raw.get("pnrCount"),
         )
+
+    async def price_calendar(self, query: CalendarQuery) -> dict[str, RatedPrice]:
+        """Price every day in a window with one request.
+
+        This is the capability the two-stage search is built on: a 91-day
+        window costs exactly the same as a one-day window. Days with no
+        flights are absent from the result rather than present with a zero.
+        """
+        variables = {
+            "search": {
+                "source": {"ids": [_place_id(query.origin)]},
+                "destination": {"ids": [_place_id(query.dest)]},
+                # The API rejects bare YYYY-MM-DD here; it wants DateTime.
+                "dates": {
+                    "start": f"{query.start}T00:00:00",
+                    "end": f"{query.end}T00:00:00",
+                },
+                "passengers": {"adults": query.adults, "children": query.children},
+                "cabinClass": {"cabinClass": query.cabin},
+            },
+            "filter": {"transportTypes": ["FLIGHT"]},
+            "options": self._options(query.currency),
+        }
+        node = await self._execute(
+            "PricesCalendar", CALENDAR_QUERY, variables, "itineraryPricesCalendar"
+        )
+
+        calendar = node.get("calendar")
+        if calendar is None:
+            raise ProviderParseError(
+                f"PricesCalendar: response carries no calendar "
+                f"({query.origin}->{query.dest}, {query.start}..{query.end})"
+            )
+
+        prices: dict[str, RatedPrice] = {}
+        for item in calendar:
+            rated = item.get("ratedPrice")
+            if not rated:
+                continue
+            raw_date = item.get("date") or ""
+            prices[raw_date[:10]] = RatedPrice(
+                price=_money(_require(rated, "price", "amount")),
+                rating=rated.get("rating") or "UNKNOWN",
+            )
+        return prices
 
     async def search_leg(self, query: LegQuery) -> list[Offer]:
         variables = {
