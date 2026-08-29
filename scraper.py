@@ -7,11 +7,11 @@ import logging
 import random
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 
 import httpx
 
 from config import MAX_RETRIES, REQUEST_TIMEOUT, SOCS_COOKIE
+from models import Route, add_days, fmt_dur, generate_dates  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -113,53 +113,6 @@ class FlightResult:
             return "?"
         parts = [s["from"] for s in self.segments] + [self.segments[-1]["to"]]
         return " -> ".join(parts)
-
-
-@dataclass
-class Route:
-    date: str
-    hub: str
-    hub_name: str
-    dest: str
-    dest_name: str
-    dom_price: int
-    dom_discounted: float
-    intl_price: int
-    total: float
-    return_date: str = ""
-    dom_airlines: list[str] = field(default_factory=list)
-    dom_stops: int = 0
-    dom_dur: int = 0
-    intl_airlines: list[str] = field(default_factory=list)
-    intl_stops: int = 0
-    intl_dur: int = 0
-
-
-# ============================================================
-# Helpers
-# ============================================================
-
-def fmt_dur(m):
-    if m <= 0:
-        return "?"
-    h, r = divmod(m, 60)
-    return f"{h}h{r:02d}m"
-
-
-def generate_dates(start, end, every):
-    """Generate dates from start to end, every N days."""
-    dates = []
-    cur = datetime.strptime(start, "%Y-%m-%d")
-    stop = datetime.strptime(end, "%Y-%m-%d")
-    while cur <= stop:
-        dates.append(cur.strftime("%Y-%m-%d"))
-        cur += timedelta(days=every)
-    return dates
-
-
-def add_days(date, days):
-    """Return *date* shifted by *days*, both as "YYYY-MM-DD" strings."""
-    return (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 # ============================================================

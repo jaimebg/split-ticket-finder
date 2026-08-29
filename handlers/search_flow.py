@@ -26,7 +26,7 @@ from handlers.utils import (
     parse_positive_int,
     split_message,
 )
-from scraper import generate_dates
+from models import generate_dates
 from search import format_results, routes_to_json, run_search
 
 logger = logging.getLogger(__name__)

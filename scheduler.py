@@ -13,7 +13,8 @@ from config import (
     PRICE_DROP_THRESHOLD,
 )
 from db import add_price_check, get_favorites, update_favorite_price
-from scraper import FetchError, ParseError, add_days, search
+from models import add_days
+from scraper import FetchError, ParseError, search
 
 logger = logging.getLogger(__name__)
 

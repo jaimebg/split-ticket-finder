@@ -10,7 +10,7 @@ from config import DEFAULT_HUBS, ORIGIN
 from db import get_search_by_id, get_searches
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
 from handlers.utils import esc, load_json_list, split_message
-from scraper import Route
+from models import Route
 
 logger = logging.getLogger(__name__)
 

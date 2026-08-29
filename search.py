@@ -11,15 +11,13 @@ from config import (
     DOMESTIC_DISCOUNT,
     MAX_CONCURRENCY,
 )
+from models import Route, add_days, fmt_dur
 from scraper import (
     FetchError,
     FlightResult,
     ParseError,
-    Route,
-    add_days,
     build_client,
     build_url,
-    fmt_dur,
     search,
 )
 
