@@ -153,7 +153,12 @@ the full list, including the discount rule, concurrency and alert thresholds.
 ```
 bot.py                  entry point: config validation, handler wiring, polling
 config.py               environment-driven settings, fail-fast validation
-scraper.py              Google Flights client: URL encoding, HTTP, parsing
+models.py               domain types shared across providers and the search engine
+providers/
+  base.py               protocols, shared dataclasses (Offer, Segment, ...), error taxonomy
+  google.py             Google Flights: tfs URL encoding, HTTP, parsing, provider adapter
+  kiwi.py               Kiwi.com GraphQL client: calendar, itinerary and place search
+  registry.py           provider selection, driven by the PROVIDERS env var
 search.py               multi-phase orchestrator, discount maths, formatting
 scheduler.py            background price-tracking loop
 db.py                   async SQLite layer with in-place migrations
@@ -163,7 +168,7 @@ handlers/
   favorites.py          track / list / untrack routes
   history.py            view and re-run past searches
   utils.py              validation, HTML escaping, message chunking
-tests/                  71 tests, no network access required
+tests/                  136 offline tests, plus a network-marked drift guard run separately
 ```
 
 ### Notes on some decisions
