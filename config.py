@@ -128,6 +128,12 @@ MAX_CONCURRENCY = _int_env("MAX_CONCURRENCY", 4, lo=1)
 REQUEST_TIMEOUT = _float_env("REQUEST_TIMEOUT", 20.0, lo=1.0, hi=120.0)
 MAX_RETRIES = _int_env("MAX_RETRIES", 2, lo=0)
 
+# ── Kiwi provider ────────────────────────────────────────
+# The GraphQL backend requires a partner identifier. It is not a secret, and
+# an invalid one fails loudly with AppError("Partner not valid.") rather than
+# degrading quietly, so it is safe to make configurable.
+KIWI_PARTNER = os.getenv("KIWI_PARTNER", "skypicker").strip() or "skypicker"
+
 # ── Database ─────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "flight_finder.db")
 
