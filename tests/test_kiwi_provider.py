@@ -478,3 +478,76 @@ async def test_price_calendar_raises_when_calendar_key_is_entirely_missing():
         await _provider(handler).price_calendar(
             CalendarQuery(origin="LPA", dest="ZZZ", start="2026-10-01", end="2026-10-05")
         )
+
+
+# ── Place search ─────────────────────────────────────────────────────────────
+
+from providers.base import Place, SupportsPlaces
+
+
+def test_kiwi_advertises_the_places_capability():
+    assert isinstance(KiwiProvider(), SupportsPlaces)
+
+
+async def test_resolve_place_returns_airports(kiwi_fixture):
+    payload = kiwi_fixture("places_tokyo")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    places = await _provider(handler).resolve_place("Tokyo")
+
+    assert all(isinstance(p, Place) for p in places)
+    assert [p.code for p in places] == ["NRT", "HND", "TJH"]
+    assert places[0].name == "Narita International"
+    assert places[0].city == "Tokyo"
+    assert places[0].country == "Japan"
+    assert places[0].place_id == "Station:airport:NRT"
+
+
+async def test_resolve_place_handles_a_single_match(kiwi_fixture):
+    payload = kiwi_fixture("places_gran_canaria")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    places = await _provider(handler).resolve_place("Gran Canaria")
+    assert len(places) == 1
+    assert places[0].code == "LPA"
+
+
+async def test_resolve_place_returns_empty_for_no_match():
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"places": {"__typename": "PlaceConnection", "edges": []}}
+        })
+
+    assert await _provider(handler).resolve_place("qqqqqq") == []
+
+
+async def test_resolve_place_passes_term_and_limit(kiwi_fixture):
+    seen = {}
+    payload = kiwi_fixture("places_tokyo")
+
+    def handler(request):
+        import json as _json
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json=payload)
+
+    await _provider(handler).resolve_place("Tokyo", limit=3)
+    variables = seen["body"]["variables"]
+    assert variables["search"]["term"] == "Tokyo"
+    assert variables["first"] == 3
+    assert variables["filter"]["onlyTypes"] == ["AIRPORT"]
+
+
+async def test_resolve_place_skips_nodes_without_an_iata_code(kiwi_fixture):
+    """Non-airport nodes have no code and are not selectable origins."""
+    payload = kiwi_fixture("places_tokyo")
+    payload["data"]["places"]["edges"][1]["node"]["code"] = None
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    places = await _provider(handler).resolve_place("Tokyo")
+    assert [p.code for p in places] == ["NRT", "TJH"]

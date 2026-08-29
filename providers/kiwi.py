@@ -32,6 +32,7 @@ from providers.base import (
     CalendarQuery,
     LegQuery,
     Offer,
+    Place,
     ProviderFetchError,
     ProviderParseError,
     RatedPrice,
@@ -85,6 +86,16 @@ CALENDAR_QUERY = """query PricesCalendar($search: SearchPricesCalendarInput, $fi
       currency { code }
       calendar { date ratedPrice { price { amount } rating } }
     }
+  }
+}"""
+
+PLACES_QUERY = """query Places($search: PlacesSearchInput, $filter: PlacesFilterInput, $options: PlacesOptionsInput, $first: Int) {
+  places(search: $search, filter: $filter, options: $options, first: $first) {
+    __typename
+    ... on AppError { message }
+    ... on PlaceConnection { edges { node {
+      __typename id legacyId name
+      ... on Station { code city { name country { name } } } } } }
   }
 }"""
 
@@ -405,3 +416,35 @@ class KiwiProvider:
             ]
         offers.sort(key=lambda o: o.price)
         return offers
+
+    async def resolve_place(self, term: str, limit: int = 8) -> list[Place]:
+        """Turn free text into airports, so the bot never demands an IATA code."""
+        variables = {
+            "search": {"term": term},
+            "filter": {"onlyTypes": ["AIRPORT"]},
+            "options": {"locale": "en"},
+            "first": limit,
+        }
+        node = await self._execute("Places", PLACES_QUERY, variables, "places")
+
+        edges = node.get("edges")
+        if edges is None:
+            raise ProviderParseError(f"Places: response carries no edges ({term!r})")
+
+        places: list[Place] = []
+        for edge in edges:
+            item = edge.get("node") or {}
+            code = item.get("code")
+            if not code:
+                # Not an airport station -- nothing bookable to select.
+                continue
+            city = item.get("city") or {}
+            country = city.get("country") or {}
+            places.append(Place(
+                code=code,
+                name=item.get("name") or code,
+                city=city.get("name") or "",
+                country=country.get("name") or "",
+                place_id=item.get("id") or _place_id(code),
+            ))
+        return places
