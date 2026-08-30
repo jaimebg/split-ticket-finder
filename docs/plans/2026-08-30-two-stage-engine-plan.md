@@ -605,6 +605,14 @@ class Itinerary:
             return None
         return int((self.savings / self.through_fare) * 100)
 
+    def with_through_fare(self, fare: Decimal | None) -> Itinerary:
+        """Return a copy carrying a through-fare baseline (phase 2 sets this)."""
+        return dataclasses.replace(self, through_fare=fare)
+
+    def with_providers(self, *names: str) -> Itinerary:
+        """Return a copy naming the providers that priced it (cross-check sets this)."""
+        return dataclasses.replace(self, providers=tuple(names))
+
     @classmethod
     def from_candidate(cls, candidate: Candidate, hub_name: str, dest_name: str) -> Itinerary:
         """Build an unconfirmed itinerary from a calendar-derived candidate."""
@@ -621,17 +629,19 @@ class Itinerary:
         )
 ```
 
-Add `from typing import Callable` and `from decimal import Decimal` to the imports; `dataclass`, `field`, `datetime` and `timedelta` are already there.
+Add `import dataclasses`, `from typing import Callable` and `from decimal import Decimal` to the imports; `dataclass`, `field`, `datetime` and `timedelta` are already there.
+
+**`Itinerary` is frozen, so Tasks 8 and 10 cannot assign `through_fare` or `providers` after construction.** That is why `with_through_fare` and `with_providers` exist — they are the only supported way to attach those, and they return copies. Add two tests proving each returns a new object with the field set and leaves the original untouched.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/pytest tests/test_models.py -v`
-Expected: PASS, 17 tests.
+Expected: PASS, 19 tests.
 
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `.venv/bin/pytest && .venv/bin/ruff check .`
-Expected: PASS, 164 tests.
+Expected: PASS, 166 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -858,6 +868,23 @@ logger = logging.getLogger(__name__)
 LegKey = tuple[str, str, str]
 
 
+def report(
+    on_progress: ProgressCallback | None, phase: str, done: int, total: int
+) -> None:
+    """Emit a progress tick, swallowing anything the callback throws.
+
+    Progress is cosmetic. A UI callback that fails -- a Telegram edit hitting a
+    rate limit, say -- must never cost a search that has already done its work.
+    Phase 0 imports this rather than duplicating it.
+    """
+    if on_progress is None:
+        return
+    try:
+        on_progress(Progress(phase=phase, done=done, total=total))
+    except Exception:
+        logger.exception("Progress callback failed; continuing search.")
+
+
 class LegFetcher:
     """Runs many leg queries against one provider under a concurrency cap."""
 
@@ -880,13 +907,7 @@ class LegFetcher:
         self.fetch_errors = 0
 
     def _report(self, phase: str, done: int, total: int) -> None:
-        """Emit a progress tick. Never let a UI callback break a search."""
-        if self._on_progress is None:
-            return
-        try:
-            self._on_progress(Progress(phase=phase, done=done, total=total))
-        except Exception:
-            logger.exception("Progress callback failed; continuing search.")
+        report(self._on_progress, phase, done, total)
 
     async def _one(self, query: LegQuery) -> list[Offer]:
         async with self._semaphore:
@@ -952,7 +973,7 @@ Expected: PASS, 8 tests.
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `.venv/bin/pytest && .venv/bin/ruff check .`
-Expected: PASS, 172 tests.
+Expected: PASS, 174 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1146,7 +1167,7 @@ Expected: PASS, 6 tests.
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `.venv/bin/pytest && .venv/bin/ruff check .`
-Expected: PASS, 178 tests.
+Expected: PASS, 180 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1289,7 +1310,7 @@ Expected: PASS, 14 tests.
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `.venv/bin/pytest && .venv/bin/ruff check .`
-Expected: PASS, 186 tests.
+Expected: PASS, 188 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1441,7 +1462,7 @@ Expected: PASS, 11 tests.
 - [ ] **Step 5: Run the full suite and lint**
 
 Run: `.venv/bin/pytest && .venv/bin/ruff check .`
-Expected: PASS, 197 tests.
+Expected: PASS, 199 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1699,4 +1720,4 @@ The "How it works" section and its mermaid diagram describe the grid search. Rew
 
 **Type consistency:** `Candidate` and `Itinerary` both expose `.total` as `Decimal`, and `Itinerary.from_candidate` is the only bridge between them. `LegKey` is `tuple[str, str, str]` in both `engine/fetch.py` and `engine/shortlist.py` — import it from `fetch` rather than redefining. `CalendarGrid`'s four mappings are keyed `hub` for domestic and `(hub, dest)` for onward, consistently in Tasks 4 and 5.
 
-**Test-count ladder:** 144 → 147 (T1) → 164 (T2) → 172 (T3) → 178 (T4) → 186 (T5) → 197 (T6) → ~206 (T7) → ~214 (T8) → ~224 (T9) → ~236 (T10) → ~244 (T11) → ~256 (T12). Tasks 7-13 give estimates because their test lists are specified by behaviour rather than as literal code; treat a materially lower count as a signal that cases were missed, and trust `pytest` over these numbers.
+**Test-count ladder:** 144 → 147 (T1) → 166 (T2) → 174 (T3) → 180 (T4) → 188 (T5) → 199 (T6) → ~206 (T7) → ~214 (T8) → ~224 (T9) → ~236 (T10) → ~244 (T11) → ~256 (T12). Tasks 7-13 give estimates because their test lists are specified by behaviour rather than as literal code; treat a materially lower count as a signal that cases were missed, and trust `pytest` over these numbers.
