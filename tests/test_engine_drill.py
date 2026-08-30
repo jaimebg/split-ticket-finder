@@ -8,13 +8,14 @@ to guarantee.
 """
 from __future__ import annotations
 
+import dataclasses
 from decimal import Decimal
 
 import pytest
 
-from engine.drill import confirm
+from engine.drill import confirm, through_fares
 from engine.fetch import LegFetcher
-from models import CancelToken, Candidate, SearchCancelled
+from models import CancelToken, Candidate, Itinerary, SearchCancelled
 from providers.base import ProviderError
 from tests.test_engine_fetch import FakeProvider, _offer
 
@@ -25,6 +26,21 @@ def _cand(date, hub, dest, *, dom_price="100", onward_price="500",
     return Candidate(date=date, return_date=return_date, hub=hub, dest=dest,
                      dom_price=Decimal(dom_price), onward_price=Decimal(onward_price),
                      discount=Decimal(discount))
+
+
+def _offer_pnr(price, pnr_count):
+    """An offer priced at ``price`` reporting a specific ``pnr_count``."""
+    return dataclasses.replace(_offer(price), pnr_count=pnr_count)
+
+
+def _itin(date, dest, total, *, hub="MAD", return_date=""):
+    """An itinerary whose ``.total`` is exactly ``total`` -- via a single dom_out
+    offer -- so tests can control cheapest-date ordering without caring about
+    the rest of the itinerary's shape."""
+    return Itinerary(
+        date=date, return_date=return_date, hub=hub, hub_name=hub, dest=dest, dest_name=dest,
+        discount=Decimal(0), dom_out=_offer(str(total)),
+    )
 
 
 def _fetcher(provider, **kw):
@@ -293,3 +309,192 @@ async def test_confirm_never_sets_min_layover_children_or_non_economy_cabin():
     )
 
     assert len(result) == 1
+
+
+# ── Phase 2: through_fares ───────────────────────────────────────────────────
+#
+# Only a single-PNR offer (pnr_count == 1) can substantiate a through-fare
+# claim. Kiwi itself sells multi-PNR "self-transfer" itineraries -- a real
+# LPA->NRT query came back with pnrCount: 3 -- and comparing our split against
+# one of those is comparing a split against another split, not a genuine
+# saving. Google cannot report pnr_count at all, so None must not be treated
+# as 1 either.
+
+
+async def test_through_fares_queries_only_the_three_cheapest_distinct_dates():
+    """Four distinct dates, one of them ("2026-10-04") priced far above the
+    others, and one date ("2026-10-01") shared by two destinations. Only the
+    three cheapest dates should generate any query at all, and every
+    (destination, date) pair on those dates gets exactly one query."""
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("50", 1)],
+        ("LPA", "JFK", "2026-10-01"): [_offer_pnr("60", 1)],
+        ("LPA", "NRT", "2026-10-02"): [_offer_pnr("100", 1)],
+        ("LPA", "NRT", "2026-10-03"): [_offer_pnr("150", 1)],
+        ("LPA", "NRT", "2026-10-04"): [_offer_pnr("999", 1)],
+    })
+    itineraries = [
+        _itin("2026-10-01", "NRT", "50"),
+        _itin("2026-10-01", "JFK", "60"),
+        _itin("2026-10-02", "NRT", "100"),
+        _itin("2026-10-03", "NRT", "150"),
+        _itin("2026-10-04", "NRT", "999"),  # most expensive date -- must be excluded
+    ]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    # 4 pairs on the 3 cheapest dates: (NRT,01) (JFK,01) (NRT,02) (NRT,03).
+    assert len(provider.seen) == 4
+    assert all(q.date != "2026-10-04" for q in provider.seen)
+    assert result == {
+        ("NRT", "2026-10-01"): Decimal("50"),
+        ("JFK", "2026-10-01"): Decimal("60"),
+        ("NRT", "2026-10-02"): Decimal("100"),
+        ("NRT", "2026-10-03"): Decimal("150"),
+    }
+
+
+async def test_through_fares_skips_a_cheaper_multi_pnr_offer():
+    """The cheapest offer overall has pnr_count == 3 (Kiwi's own self-transfer)
+    and is cheaper than the single-PNR alternative. A naive "cheapest wins"
+    implementation would report 300, not 400."""
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [
+            _offer_pnr("300", 3),
+            _offer_pnr("400", 1),
+        ],
+    })
+    itineraries = [_itin("2026-10-01", "NRT", "500")]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {("NRT", "2026-10-01"): Decimal("400")}
+
+
+async def test_through_fares_pair_absent_when_no_single_pnr_offer_exists():
+    """Every offer for this leg is multi-PNR -- the pair must not appear at
+    all, not be recorded as a saving of zero."""
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("300", 3), _offer_pnr("350", 2)],
+    })
+    itineraries = [_itin("2026-10-01", "NRT", "500")]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {}
+
+
+async def test_through_fares_pnr_count_none_does_not_qualify():
+    """A Google-style offer reports pnr_count=None. None is not 1, so it
+    cannot substantiate a through-fare claim, no matter how cheap it is."""
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("200", None)],
+    })
+    itineraries = [_itin("2026-10-01", "NRT", "500")]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {}
+
+
+async def test_through_fares_round_trip_sums_outbound_and_return():
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("400", 1)],
+        ("NRT", "LPA", "2026-10-15"): [_offer_pnr("380", 1)],
+    })
+    itineraries = [_itin("2026-10-01", "NRT", "500", return_date="2026-10-15")]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=14,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {("NRT", "2026-10-01"): Decimal("780")}
+
+
+async def test_through_fares_round_trip_non_qualifying_return_yields_no_entry():
+    """A single-PNR outbound paired with a multi-PNR return is not a
+    through-fare: both directions must qualify independently."""
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("400", 1)],
+        ("NRT", "LPA", "2026-10-15"): [_offer_pnr("380", 3)],
+    })
+    itineraries = [_itin("2026-10-01", "NRT", "500", return_date="2026-10-15")]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=14,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {}
+
+
+async def test_through_fares_on_an_empty_itinerary_list_makes_no_requests():
+    provider = FakeProvider()
+
+    result = await through_fares(
+        _fetcher(provider), [], origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {}
+    assert provider.seen == []
+
+
+async def test_through_fares_never_sets_min_layover_children_or_non_economy_cabin():
+    """Google raises a bare ProviderError for any of these -- aborting the
+    whole phase by design -- so through_fares must never set them."""
+    class _AssertingProvider(FakeProvider):
+        async def search_leg(self, query):
+            if query.min_layover is not None or query.children or query.cabin != "ECONOMY":
+                raise ProviderError("would abort a Google-only deployment")
+            return await super().search_leg(query)
+
+    provider = _AssertingProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("400", 1)],
+    })
+    itineraries = [_itin("2026-10-01", "NRT", "500")]
+
+    result = await through_fares(
+        _fetcher(provider), itineraries, origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    assert result == {("NRT", "2026-10-01"): Decimal("400")}
+
+
+async def test_through_fares_feeds_itinerary_savings_and_absent_pair_stays_none():
+    """The mapping through_fares produces attaches cleanly via
+    with_through_fare: a priced pair reports real savings/savings_pct, and an
+    itinerary for an absent pair reports None for both -- never zero."""
+    provider = FakeProvider({
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("980", 1)],
+        # No offer at all for the second destination/date.
+    })
+    priced = _itin("2026-10-01", "NRT", "612")
+    unpriced = _itin("2026-10-02", "JFK", "612")
+
+    fares = await through_fares(
+        _fetcher(provider), [priced, unpriced], origin="LPA", trip_days=0,
+        adults=1, currency="EUR",
+    )
+
+    priced_itin = priced.with_through_fare(fares.get((priced.dest, priced.date)))
+    unpriced_itin = unpriced.with_through_fare(fares.get((unpriced.dest, unpriced.date)))
+
+    assert priced_itin.savings == Decimal("368.00")
+    assert priced_itin.savings_pct == 37
+    assert unpriced_itin.savings is None
+    assert unpriced_itin.savings_pct is None

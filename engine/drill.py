@@ -15,6 +15,17 @@ fetched once no matter how many destinations share it -- and this module
 fetches all of them in a single ``LegFetcher.fetch_many`` call, so the
 concurrency cap applies across the whole phase and progress is one
 monotonic count rather than one per candidate.
+
+Phase 2 (``through_fares``, below) prices the honest baseline the rest of
+this project has always claimed to beat: what the airline itself would
+charge to fly the same route as a single, ordinary through-fare. That claim
+is only honest when the offer priced is actually a single ticket. Kiwi
+happily returns multi-PNR "self-transfer" itineraries -- effectively its own
+split ticket -- stitched together into one search result; pricing one of
+those as "the through-fare" would compare our split against another split
+and call the difference a saving. So only an offer with ``pnr_count == 1``
+counts, and Google's offers, which never report a PNR count at all, can
+never qualify either -- ``None`` is not evidence of anything.
 """
 from __future__ import annotations
 
@@ -26,6 +37,7 @@ from models import Candidate, Itinerary
 from providers.base import LegQuery, Offer
 
 PHASE = "Phase 1"
+PHASE_THROUGH_FARE = "Phase 2"
 
 
 def _cheapest(offers: list[Offer]) -> Offer:
@@ -111,3 +123,93 @@ async def confirm(
 
     itineraries.sort(key=lambda itin: itin.total)
     return itineraries
+
+
+def _cheapest_single_pnr(offers: list[Offer] | None) -> Offer | None:
+    """The cheapest offer among ``offers`` that is a genuine single ticket.
+
+    ``None`` (the leg had no results at all) and "no offer has pnr_count == 1"
+    are the same outcome here: no through-fare can be substantiated. Note
+    ``o.pnr_count == 1`` rather than ``!= None`` -- a bare ``!=`` would treat
+    Google's ``None`` as passing, when it is exactly the case this guards
+    against.
+    """
+    if not offers:
+        return None
+    single_pnr = [o for o in offers if o.pnr_count == 1]
+    if not single_pnr:
+        return None
+    return _cheapest(single_pnr)
+
+
+async def through_fares(
+    fetcher: LegFetcher,
+    itineraries: list[Itinerary],
+    *,
+    origin: str,
+    trip_days: int,
+    dates_limit: int = 3,
+    adults: int,
+    currency: str,
+) -> dict[tuple[str, str], Decimal]:
+    """Price the through-fare baseline for the cheapest itineraries, honestly.
+
+    This is a baseline, not a second search: it prices only the
+    ``dates_limit`` cheapest *distinct* dates among ``itineraries`` (ranked by
+    each date's cheapest itinerary total), and only the (destination, date)
+    pairs that actually occur on those dates -- one query per pair, fetched
+    in a single ``fetch_many`` call under ``PHASE_THROUGH_FARE``.
+
+    Only an offer with ``pnr_count == 1`` counts as a through-fare -- see the
+    module docstring. A pair with no qualifying offer is simply absent from
+    the result; it is never recorded as a saving of zero. A round trip needs
+    both the outbound (``origin`` -> dest on ``date``) and return (dest ->
+    ``origin`` on the itinerary's ``return_date``) legs to each independently
+    qualify -- a single-PNR outbound paired with a multi-PNR return yields no
+    entry.
+
+    ``trip_days`` is the authority on trip shape, exactly as in ``confirm``:
+    ``trip_days > 0`` means round-trip, using each itinerary's own
+    ``return_date`` for the return leg's query date. An empty ``itineraries``
+    list makes no requests and returns ``{}``.
+    """
+    round_trip = trip_days > 0
+
+    ordered = sorted(itineraries, key=lambda itin: itin.total)
+    selected_dates: list[str] = []
+    for itin in ordered:
+        if itin.date not in selected_dates:
+            selected_dates.append(itin.date)
+        if len(selected_dates) >= dates_limit:
+            break
+    dates = set(selected_dates)
+
+    pairs: dict[tuple[str, str], str] = {}  # (dest, date) -> return_date
+    for itin in itineraries:
+        if itin.date in dates:
+            pairs.setdefault((itin.dest, itin.date), itin.return_date)
+
+    queries: list[LegQuery] = []
+    for (dest, date), return_date in pairs.items():
+        queries.append(LegQuery(origin=origin, dest=dest, date=date,
+                                  adults=adults, currency=currency))
+        if round_trip:
+            queries.append(LegQuery(origin=dest, dest=origin, date=return_date,
+                                      adults=adults, currency=currency))
+
+    offers_by_leg = await fetcher.fetch_many(queries, phase=PHASE_THROUGH_FARE)
+
+    fares: dict[tuple[str, str], Decimal] = {}
+    for (dest, date), return_date in pairs.items():
+        out_offer = _cheapest_single_pnr(offers_by_leg.get((origin, dest, date)))
+        if out_offer is None:
+            continue
+        if not round_trip:
+            fares[(dest, date)] = out_offer.price
+            continue
+        ret_offer = _cheapest_single_pnr(offers_by_leg.get((dest, origin, return_date)))
+        if ret_offer is None:
+            continue
+        fares[(dest, date)] = out_offer.price + ret_offer.price
+
+    return fares
