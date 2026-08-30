@@ -26,7 +26,10 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -m 'not network'"
+markers = [
+    "network: hits the live Kiwi API; deselected by default, run with -m network",
+]
 
 [tool.ruff]
 line-length = 100

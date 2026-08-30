@@ -5,9 +5,9 @@ import asyncio
 
 import pytest
 
-import scraper
 import search as search_module
-from scraper import FetchError, FlightResult, ParseError, Route
+from models import Route, add_days
+from providers.google import FetchError, FlightResult, ParseError
 from search import format_results, routes_to_json, run_search
 
 
@@ -300,6 +300,6 @@ def test_format_output_stays_within_telegram_limits_for_a_large_search():
     assert all(len(c) <= 4096 for c in chunks)
 
 
-def test_add_days_matches_scraper_helper():
-    assert scraper.add_days("2026-09-01", 14) == "2026-09-15"
-    assert scraper.add_days("2026-12-25", 10) == "2027-01-04"
+def test_add_days_matches_models_helper():
+    assert add_days("2026-09-01", 14) == "2026-09-15"
+    assert add_days("2026-12-25", 10) == "2027-01-04"

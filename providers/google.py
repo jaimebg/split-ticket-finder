@@ -8,15 +8,24 @@ import random
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 import httpx
 
 from config import MAX_RETRIES, REQUEST_TIMEOUT, SOCS_COOKIE
+from providers.base import (
+    LegQuery,
+    Offer,
+    ProviderError,
+    ProviderFetchError,
+    ProviderParseError,
+    Segment,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class ParseError(RuntimeError):
+class ParseError(ProviderParseError):
     """Raised when a response could not be parsed as a flight listing.
 
     Distinguishes "Google returned something we don't understand" (layout
@@ -25,7 +34,7 @@ class ParseError(RuntimeError):
     """
 
 
-class FetchError(RuntimeError):
+class FetchError(ProviderFetchError):
     """Raised when the HTTP request failed after exhausting retries."""
 
 
@@ -113,53 +122,6 @@ class FlightResult:
             return "?"
         parts = [s["from"] for s in self.segments] + [self.segments[-1]["to"]]
         return " -> ".join(parts)
-
-
-@dataclass
-class Route:
-    date: str
-    hub: str
-    hub_name: str
-    dest: str
-    dest_name: str
-    dom_price: int
-    dom_discounted: float
-    intl_price: int
-    total: float
-    return_date: str = ""
-    dom_airlines: list[str] = field(default_factory=list)
-    dom_stops: int = 0
-    dom_dur: int = 0
-    intl_airlines: list[str] = field(default_factory=list)
-    intl_stops: int = 0
-    intl_dur: int = 0
-
-
-# ============================================================
-# Helpers
-# ============================================================
-
-def fmt_dur(m):
-    if m <= 0:
-        return "?"
-    h, r = divmod(m, 60)
-    return f"{h}h{r:02d}m"
-
-
-def generate_dates(start, end, every):
-    """Generate dates from start to end, every N days."""
-    dates = []
-    cur = datetime.strptime(start, "%Y-%m-%d")
-    stop = datetime.strptime(end, "%Y-%m-%d")
-    while cur <= stop:
-        dates.append(cur.strftime("%Y-%m-%d"))
-        cur += timedelta(days=every)
-    return dates
-
-
-def add_days(date, days):
-    """Return *date* shifted by *days*, both as "YYYY-MM-DD" strings."""
-    return (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 # ============================================================
@@ -354,3 +316,162 @@ async def search(
         from_apt, to_apt, date, adults, currency, return_date=return_date, client=client
     )
     return parse_flights(html)
+
+
+# ============================================================
+# Provider adapter
+# ============================================================
+
+def _build_times(date, raw_segments):
+    """Attach dates to Google's bare [hour, minute] pairs.
+
+    Google reports clock times with no date attached. Time only ever moves
+    forward within one itinerary, so whenever a clock time is earlier than the
+    one before it the itinerary has crossed midnight and the day advances.
+    Returns one (departure, arrival) tuple per segment, with None where the
+    payload had nothing usable.
+
+    "Time only ever moves forward" is a simplification: an eastbound date-line
+    crossing (e.g. NRT -> HNL) can arrive at an earlier clock time the same
+    day, which this heuristic would misread as no day having passed. This is
+    rare on this project's routes and the payload offers no better signal to
+    detect it, so it is a known caveat rather than a handled case.
+    """
+    cursor = datetime.strptime(date, "%Y-%m-%d")
+    out = []
+    for seg in raw_segments:
+        pair = []
+        for key in ("dep_time", "arr_time"):
+            hm = seg.get(key)
+            if not (
+                isinstance(hm, list)
+                and len(hm) >= 2
+                and isinstance(hm[0], int)
+                and isinstance(hm[1], int)
+            ):
+                pair.append(None)
+                continue
+            try:
+                candidate = cursor.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+            except ValueError:
+                pair.append(None)
+                continue
+            if candidate < cursor:
+                candidate += timedelta(days=1)
+            cursor = candidate
+            pair.append(candidate)
+        out.append((pair[0], pair[1]))
+    return out
+
+
+def _to_offer(flight, query: LegQuery) -> Offer:
+    """Map one parsed FlightResult onto the shared Offer type."""
+    times = _build_times(query.date, flight.segments)
+    segments = []
+    for raw, (dep, arr) in zip(flight.segments, times, strict=True):
+        flight_no = raw.get("flight") or ""
+        carrier = flight_no[:2] if len(flight_no) >= 2 else ""
+        segments.append(Segment(
+            origin=raw.get("from", "?"),
+            dest=raw.get("to", "?"),
+            carrier=carrier,
+            carrier_name=carrier,
+            flight_no=flight_no,
+            duration=int(raw.get("duration") or 0),
+            dep_local=dep,
+            arr_local=arr,
+        ))
+
+    return Offer(
+        price=Decimal(str(flight.price)),
+        currency=query.currency.upper(),
+        airlines=list(flight.airlines),
+        stops=flight.stops,
+        duration=flight.duration,
+        segments=segments,
+        provider="google",
+        # Everything below is structurally absent from Google's payload.
+        # None means "unknown", and the formatter must say so.
+    )
+
+
+class GoogleProvider:
+    """Google Flights behind the shared provider interface.
+
+    Implements FlightProvider only: Google exposes no price calendar and no
+    place search, which is exactly why those are separate protocols.
+
+    Segment.carrier_name holds the IATA carrier code, not a full airline name --
+    Google's per-segment payload has nothing better to offer. Offer.airlines
+    does carry real airline names, read from the top-level flight listing.
+
+    LegQuery has five fields Google cannot honour the way Kiwi does:
+
+      - max_stops and exclude_carriers ARE enforced, but client-side, after
+        mapping and before the `limit` slice, so `limit` keeps meaning "up to
+        this many results I would accept". exclude_carriers compares
+        case-insensitively, since Segment.carrier is derived from the first two
+        characters of the flight number rather than looked up.
+      - children, any cabin other than "ECONOMY", and min_layover raise
+        ProviderError instead of being silently ignored or approximated:
+        encode_tfs hardcodes economy and only ever encodes adults, and
+        min_layover is not computable at all -- Google's timestamps are
+        timezone-naive local times reconstructed per airport, so differencing
+        them across a connection is meaningless.
+    """
+
+    name = "google"
+
+    def __init__(self, client: httpx.AsyncClient | None = None):
+        self._client = client
+        self._owns_client = client is None
+
+    async def _get_client(self):
+        if self._client is None:
+            self._client = build_client()
+        return self._client
+
+    async def search_leg(self, query: LegQuery) -> list[Offer]:
+        if query.children:
+            raise ProviderError(
+                "Google cannot express children: encode_tfs only ever encodes "
+                "adult passengers"
+            )
+        if query.cabin != "ECONOMY":
+            raise ProviderError(
+                f"Google cannot express cabin {query.cabin!r}: encode_tfs hardcodes economy"
+            )
+        if query.min_layover is not None:
+            raise ProviderError(
+                "Google cannot honour min_layover: its timestamps are "
+                "timezone-naive local times reconstructed per airport, so "
+                "differencing them across a connection is meaningless"
+            )
+
+        client = await self._get_client()
+        html = await fetch_html(
+            query.origin,
+            query.dest,
+            query.date,
+            query.adults,
+            query.currency,
+            client=client,
+        )
+        flights = parse_flights(html)
+        offers = [_to_offer(f, query) for f in flights]
+
+        if query.max_stops is not None:
+            offers = [o for o in offers if o.stops <= query.max_stops]
+        if query.exclude_carriers:
+            excluded = {c.upper() for c in query.exclude_carriers}
+            offers = [
+                o for o in offers
+                if not any(s.carrier.upper() in excluded for s in o.segments)
+            ]
+
+        return offers[: query.limit]
+
+    async def aclose(self):
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+            self._client = None

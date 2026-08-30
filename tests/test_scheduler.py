@@ -5,8 +5,8 @@ import pytest
 
 import db as db_module
 import scheduler as scheduler_module
+from providers.google import FlightResult
 from scheduler import _sample_dates, check_favorites
-from scraper import FlightResult
 
 
 class FakeBot:

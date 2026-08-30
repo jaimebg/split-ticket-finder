@@ -23,3 +23,14 @@ async def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(path))
     await db.init_db()
     return str(path)
+
+
+@pytest.fixture
+def kiwi_fixture():
+    """Load a recorded Kiwi GraphQL response by name (no .json suffix)."""
+    import json
+
+    def _load(name: str) -> dict:
+        return json.loads((FIXTURE_DIR / "kiwi" / f"{name}.json").read_text())
+
+    return _load

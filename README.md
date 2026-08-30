@@ -153,7 +153,12 @@ the full list, including the discount rule, concurrency and alert thresholds.
 ```
 bot.py                  entry point: config validation, handler wiring, polling
 config.py               environment-driven settings, fail-fast validation
-scraper.py              Google Flights client: URL encoding, HTTP, parsing
+models.py               domain types shared across providers and the search engine
+providers/
+  base.py               protocols, shared dataclasses (Offer, Segment, ...), error taxonomy
+  google.py             Google Flights: tfs URL encoding, HTTP, parsing, provider adapter
+  kiwi.py               Kiwi.com GraphQL client: calendar, itinerary and place search
+  registry.py           provider selection, driven by the PROVIDERS env var
 search.py               multi-phase orchestrator, discount maths, formatting
 scheduler.py            background price-tracking loop
 db.py                   async SQLite layer with in-place migrations
@@ -163,7 +168,7 @@ handlers/
   favorites.py          track / list / untrack routes
   history.py            view and re-run past searches
   utils.py              validation, HTML escaping, message chunking
-tests/                  71 tests, no network access required
+tests/                  the full suite runs offline; a network-marked drift guard runs separately
 ```
 
 ### Notes on some decisions
@@ -209,13 +214,15 @@ total, and reporting it as a price drop on every cycle.
 ```bash
 pip install -e ".[dev]"
 
-pytest              # 71 tests, all offline
+pytest              # offline tests only
+pytest -m network   # drift guard: checks the live Kiwi schema
 ruff check .        # lint
 ```
 
-The parser is pinned against a trimmed capture of a real Google Flights response
-(`tests/fixtures/`), so the array-index layout it depends on is covered by tests
-without any test needing network access.
+The parser depends on undocumented response shapes from both sources. The
+Google parser is pinned against a recorded HTML capture; the Kiwi client is
+pinned against recorded JSON, plus a network-marked drift guard that
+introspects the live schema and fails if a field the client reads has moved.
 
 ## Limitations
 

@@ -13,7 +13,7 @@ import pytest
 import db as db_module
 from handlers.history import _route_from_dict
 from handlers.utils import ValidationError, esc, parse_date, parse_date_list, split_message
-from scraper import Route, generate_dates
+from models import Route, generate_dates
 from search import format_results, routes_to_json
 
 

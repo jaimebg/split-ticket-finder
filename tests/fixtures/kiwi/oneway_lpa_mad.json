@@ -1,0 +1,369 @@
+{
+  "data": {
+    "onewayItineraries": {
+      "__typename": "Itineraries",
+      "itineraries": [
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiRlI6MjAxMjpMUEE6MTc5MTI3MTgwMDpNQUQ6MTc5MTI4MjAwMDplY29ub215OkZhbHNlOjo6IiwicHJpY2UiOiIyOSJ9",
+          "duration": 10200,
+          "pnrCount": 1,
+          "price": {
+            "amount": "29"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 0,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "34.99"
+                }
+              },
+              {
+                "tierPrice": {
+                  "amount": "69.98"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HHwA5sNkKIxZwM-vw8zlnphmtw4G8krv-GzfpOXYNheZ6TVzw97ZA6KfjumwY3fSgKSNB9h-_jgZyhzGQzKRegDjEBJYTzVSsjxMPH2aTibHuHis34LGwQcarRHc6bPrtQGCcJIkHz63-l7x6aT3HyYj_UgxSm2rrqZgVBJGnmnitmfYb_I8-S5VLx6ad7lTfLxqnZLpUkwqiFEt0kpQQuck_Bhc855l1y9kzhwyOvwgLtpoZmhD1PXgm8vCPhbLvqFVJ5llWvyZI9dwsJr24-x2pzihWabt3nGSR8vwhaZS5KDHHwRGfILE8qgXgBeKYt3TrJpU-I6aIbGMlvV6CQJzBv1y1hvdvSKbr2OCpmaWeQN1Dma6uSKGCGK15JsrG1apsJm_gAbf0tNUafJBgKYgAketNk7JTJLemON0SDUSNgSzQeNhPVb2B7MCZhPY5yCJrquQ2wyPo985AsrPROvk22E7lvHCdZ5ygZ_LfZEYLTEfogcX0K2B2lj-KZ0GznunISeUmIg3Tv0k7y0aPaYgpg03_1nr2sGGW_3lWO1S73xAClAkgIKgboq-g8MsJeRxJZQjvc1aVzi6Wws_rk78McFnYvqj9pNG1ddHjX-WqxU2WqIcyRShbM3wGl3gsBDU3cpJYKSdJv1gmplAwa1WAl8UcCeKuW5m5h79BIq_elxnJ5XmXsg8_DmbOqrx0EgcMX0tJA8A1sA7SSutnZVey9q1FuUSpG6WglZLhLusVqD7tBET6Ney_vLms0LktoDaTW6BsnhWXpM9ZOaWCu_Z1O76bqftCgUjUObQf-ml8LUTI8qBEj6D1OB64mIvzywv5eEQiAldyXGd4cnbQlB5VsXO71-ArNI-4QEbtjcnnSmsV_5Y9vlS9NngYrYP5HzTRZMzdAuCEmcGAS_P8u4mIRTJwAnCM3TZIzqP0h9c1t4p3BoHFr2PLl1DZtuB4&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "29"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=H7fJu3XGfV_kMcNmPity0hbUZwvTpTu-lotofpwsq0V2lkdVqVp81X3y0ftVTI8-_se_IfY8LLmbv1hRnT0yhaSfuvAZMSPjretrmNH_iIHo57XWzl2PhC7WHj9ZVXIyFJ02BdfCMF2B5Sb4pe4DCMtE8qSESC7-3XselY6UtP5M4ZztezvRhGtLcef_PpzerU95vutZmxh4PQeP9_8kkNA_MdwShUJYgLGKTE4b8r5-o_cVlFFY_jtG1lJ5jwsJRgADbG0tAm6BbGjmTrBFi2ZaKw1tIkJUK2bGxdHkgb1pcZ5fx42EietkRGwTupVpQYBU6B5Swc35N4Aq45LAcSTh3HYqs4RqEkM3fJyhuIc6HZ467fkhWyFAFHpeo266imUk9Np3_-kvqYhTDA7Enw3f-oNdJYat_1BW6yPqEVPmIfCnyWCSG-FL8MUSIDM6yu5Y4n6TPDHxrl-82Ki3eMvCZBJQtPDneW5dLjAaEe7NWlUcTiPKFn_70CBRUWtJdJ7XGiYKs4sJ54IdUDsQnp5JVR0xUmNFgeBWGVxpa_GXQrPTqtQPt54jDXkOguy5fJnLiJYVgDVLI8KDUniU6j6G5N7hPYUytWWHWafUA8OOC6QOiP_m5z06SMo7g07M9BsxwEN-s5V5zBsbcKnXQAPxkyMV8Iitmf_9XjK8N7F80dje-Hzs8dXqe36Jaoih6bBDcGecCbV9nbvME9t8pCT83Bp2325XSK6SJpIxlH4LRFRTxbBdO_L7Oz6avQK9TcFCFzbtodIezvz-eA88d9wvENwxTyrkqzEMrLPK5J1qd5qYNL1S6ZAHeben7NiA9cynYL4DZpbKEQd6y6F5nXWjAAZVjUfEA-F8l5Sq32fAsZ5Uoy0kiUxZ5xuOmIhWJBqkswPQyMcqe3BGicSWMUdD71x61qtnRsU_aV42jcIbQcS547qNruCm8p1f3voZiH5JOtGubw26-fFnNXeX5NQ%3D%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "34.0768"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "2012",
+                  "duration": 10200,
+                  "carrier": {
+                    "code": "FR",
+                    "name": "Ryanair"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "LPA",
+                      "name": "Gran Canaria"
+                    },
+                    "localTime": "2026-10-06T08:30:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T12:20:00"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiSTI6MTYzMDpMUEE6MTc5MTI2NDYwMDpNQUQ6MTc5MTI3NDUwMDplY29ub215OkZhbHNlOjo6STIiLCJwcmljZSI6IjQxIn0=",
+          "duration": 9900,
+          "pnrCount": 1,
+          "price": {
+            "amount": "41"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 1,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "45"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HceVMgqyy4rztXykmMPc6aZAzOGmZD0tb6q2JL_5OYFYPxSjtGrLLrOJM_xVNy8ZJrqRslxnPk_m2LBOKeoAYOKWaHX-qZFyeBeaano9Jk8v-9SHglwCyPFikTG40K2G3Rugtm3b2hKEBylnMlvkDdmE40NL79xU5_aeE2Tc2Owt9KvcVnnrFVyxmyTKznEKUB9ulNTJiG_dzNsjWFd3UqdU-nQc6OWGOtuiuWArXhYYY9WKInJDhCXVrZmHQRTwsnqBZaxbdFEVb4LH2OkrfL1RsH69_K_r1k-2CM6atjsUtql2_m-fC_lCEcDPhwuL8FIaJJHifHWsv447MY07iwpRcTwb8f2AtCtk7bQnK30_1xcK67b25i91oWEAQd2zqy8UiGzM61xgBIZSNyqr7FuctB_vmR9M7yy2zn-L5uXZUAZm93fZn9roh67JS6L1mMP9aRoPdQFPwX72P4jqgcQTMKzwS_M8F7EBX0rv-EiWO-vmouaPzuGegZz3Jl5QGpB1E3_JBKJfv_we47y5K3zj793LmKHwP-cJBq63ueQZdD6rCVfUrtHNvxGw4UcYv-1D7uj7eT9r00_OA_u9DuY3_1R1phS-lYMFRtSiEqwYn_tCd5rSjJuve3hOeAq3mzU5D39MXMNtnzp-uQYLf25OeQm5Bup4vgVSJilOLa-MILzNujT_DJGuQYCQzXOjK_GwgA1nGVRtIzGj25wuqfz5E_OYBBoWfHXv_rEvQekeoPDwEEro4MkK9aZwc1X_ttSuSY-PxeOot6OOlIuLTjwAcolj1uTbMU5OyfkdwFh6WPqOshixptvd4lxmSnPJJxoybGm3m_v7rGFWiabRkfzkA-RBNp39yAgSHIdBOUc9oX_VxOkwb5k59ozh5-IMUIy6NvU_s8czH17lzZGtFFD-bdBqP4A5tUQO9FkOoP3JCzhrd4BDE96HocRy20QOx&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "41"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HXdLrSiBSCdzsJNuLPYaj55FlP1vrUh3-79_el9rAUIoIFTyMzaF9K1Kn-97mWEvygF2ycuX1OGbMErsx82qOqeJp14E68FRB5C9lyh1jXaSVYAguIKQ8yxMWXY5Dqi-Q1-9ago8L9Z_nwJ9AGMFm8w5NYFpNtyLFo0_lIEL_mefqi-UmoHp9-gRCQxYI_hZr7scksV8p0aPi9oRG1KUzD_4-BaD9RU4rQwW1Rba7uYUdZeCbCtBufUBSqb6AY5yLGaEd7oJjWK6f8BxCOHNmqinZCZ01Sc84aCsHXGYw9p-0wfljztePGSB9vtXEnKqX4nirYABV35aYxM4Stfq2G_7C9l9wqIcY4Nsm4CEKmclpD5108xl9VoSmplmfhLeomGbuR4tnBAxQwlOek2gMuxa5sweafTyfHpX5VtzWGYl_LXSv4Ai1_4pXvBiKoS0a99jTOLhMg04p8ekF-UcqmZDhuyiSFpGBdoSidq85XbIz4YKk6w2IyhUSCE-Rbh4_WMJFudrMnd1RBfAgegXk2UygQIEsfQo2lnk9Fy2o-5qAYpToId7zHysKwbeKIfTunXarRnA1Aru_pPQKpx5ubxDjFb7PEekIaPXURazx0ESBabEtpZyxd-YU1AZafUqkWKyDoOMNdxBA9wHoOC1aE_nJy1gSN_ofzaQ7_SvUw1qnGKauxxrEsFHTYm-sfIXDMUW0yWHCS1icBYjshu3SGAXcPi7aMSO7HuC0YcIdd_uhSExE0XMVOjijgIAt8QxzsyLcGz3_J-oIoebBK3okdSEYee3QmIqknrDKQWRPEdCoBLdg32G9y3P5vGP_PwSCrqG2KgDLasA7Cdyp6Wdg9qKAbgOYJsrd8K98AmA2-Pg7VYgFCb46_0qi29HWD4VnJIGCxMnc3jO76gSIloxGPeRLPO7XaGVhCT-sd73Qzx5yaQbpPN4uVuE9ZnnJOrr1BipLVlBMI_aAZsSa6o_7WbMRe5cRKbU0KlSJODaeZDjc-_X-O8mQk49EcrsKMOJU6hiv8KmaMRUMT2clbmYkDw%3D%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "48.3476"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "1630",
+                  "duration": 9900,
+                  "carrier": {
+                    "code": "I2",
+                    "name": "Iberia Express"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "LPA",
+                      "name": "Gran Canaria"
+                    },
+                    "localTime": "2026-10-06T06:30:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T10:15:00"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiSTI6MTYyNjpMUEE6MTc5MTMxNzQwMDpNQUQ6MTc5MTMyNzMwMDplY29ub215OkZhbHNlOjo6STIiLCJwcmljZSI6IjQzIn0=",
+          "duration": 9900,
+          "pnrCount": 1,
+          "price": {
+            "amount": "43"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 1,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "45"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=H-3QmZUwrwZV1GkvpjFWqxbkMTBfougJNvPi9g1eTN-jaTBDJQD1AneQxbxe5Zx7E5mrIzjuwKr51-bwvQxl-um65lCMe1THFZBP3qmdOHi3ovV_jqPxAHBmmoGSDxu5l5zX4T-TPZBWCV9ekRLyJrmhS44q9w-jOYnz798R39-awZNsVArQqW1hqdSPBEitK0wTwrFfXMJIFXNhDTfUucNjwZzT3kf2O-0vQKa4rGWWfrRikGtMioRZu2wabGoAqj3GtWCY7IUB1AzplZMDNZ2gQqcUPsPH_9PCJqMO_SXPr2nKGtVK6SP2lvJBZ8yRs6_9lCb6S3alcUswbk9G1Ja9lGPe4QO4BTnetBID0BBUBgLv03nt5chosLKTyBPaYA9pRhOVNcwUR-ar-uEIXi86CcbBSfciAxiRLa8vGPlOkxUwOLz6hgehtCFwLtEjNrx4ThzhxRQCOYMx2KaYpRowPimNA7M9Zj5uzSBrA8nHeqXZZz5MQ6xPmJBLCn0jTQ120BUW7wPg5Yvy69B-ngWwsl1cJXXYh6lsYmLUSF-REqdeIo5cwcvXHSx6dwe0QjQPYXvs-Gkvy3bHLPz78M3sdp3or2kBrWcRQzH41DjB5DaAQGpqni7T7ngYRfW9wBDCtEAh5rslUdcIssmFVCrYnTAyrq3kVbY2yXa1UvQM9ZJQxLZIUUdDOiTq2jFLs666CeCUOm0wKvpdB1jTqQv6KosAycqgzrlJeGULivgJUC2Ror-vPx5pMNghDt4smnB9-y16BF3GoR-P_L3zweIPhcns1Q13PYQYFlfl7aZLzyZpE_cqcNBoM7-yaVPbQ7OMDodG3Ob78N3c5SsCTuBYoasMhybfg7Jg4IBXyk9Rjy_S30PXest-exgUy6aKx6eqF-zBBgo-8YYco13whZAMh3OZxfBv-kYVZj9KQ9o0%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "43"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HUltDIqrWSQQk6adUxqYth4Yy6LKY2jr8QbCrbUk2wRelxk3bkQRA-Uavedl4DlfQDgaz-qmbn50IP3iaGbv-2o4BWbUeHHAr9Ks0jOgMeukiQ8dMxOyCadCsJJofB-0BNdS0KqgUtfxgxSxq0y7adRWC9FF_-xC_ahhZin2xYaf3V9hKw1M_YLAtVtCMAtG8HwTOfr6EjJ2UTFu3rbPvd58uC0B8WmotaPmha2nKagutyMFlCcRCXdpZN7QKlpGamThaeRL8NLd3reIuHl7FqXu-HnqofMNWmUgfV83OAonUjfenypY0FW3sb2FTu26rB71xHhAIO14BN9K82kFmtlg2dg7Rc_gimAUgtyoa0erh6OuvD65JOSkwAMR4PWDzG3thpht2THusi3oo982En4zisZpky2j3DJ-A-Z2Ye9ehtTo111-qtmz1uz-C4gYdAH7tgoUbBI4ZJVupBHNFLQkeU8EOGBhUU11z8cz6Drmwk-oHxs76BqzsmZwqWWg6TwtdwbC-KNw2XWCvieLBqMLaZkCyiGJKaa0_xvHE1dKO9T1MVJm6MzfQj5zIiBIYVTN55Z4Iynw5w4mkiHZ5hq6-HBO4aDAlfDwjU7qMvu4rXcaBrL1HnKfSHIUchdgkHmRWbUPiM64NBOcFcNRzGbEF50KD-xv8Cj27jybSOv4qcQmdtXa_Q-h3NEaLseVlHwi6cPz2TLYxavb8EHbHwPh-KRyAYb7P13QbmHzwf6-m0Qaz5VdIhomBZaCvHIkuq0dRU3iPfuRPCfLdEvBiy3eNypi44pVzxLG-l3cdCddHbTvOXTd3ZroxSKjTMgfmWxnDSQnh1f3hAOxH3LPe5OZ_-xJfIuor020PN3GkLeo8uWlKWjbreAi7ny0G9bbXyUMSXo182xdedUI_70Qrb5QnAF1YJyzCSjtAE0Sl7h_cg1fV8rn9RqJ20yOX_GYnvRGR0A8h6TVr_JU8LmGarg9Zt42tIDfL9afyyw7Ltx_crbMNfUEne_CRyyYsb25a&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "50.5228"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "1626",
+                  "duration": 9900,
+                  "carrier": {
+                    "code": "I2",
+                    "name": "Iberia Express"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "LPA",
+                      "name": "Gran Canaria"
+                    },
+                    "localTime": "2026-10-06T21:10:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-07T00:55:00"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiTlQ6NjAxNDpMUEE6MTc5MTMxMjMwMDpNQUQ6MTc5MTMyMjIwMDplY29ub215OkZhbHNlOjo6TlQiLCJwcmljZSI6IjQ0In0=",
+          "duration": 9900,
+          "pnrCount": 1,
+          "price": {
+            "amount": "44"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 1,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "37.5"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HnyFpMSFYiADFEeL-Jk8gfJ8QjXQvbhPFk7a5vVA8HmiFG8cJxk6U9yczMs_xy_mpVQcKSUrrnZNgn2TnMjss4SJQ70Bts-0xq63Nlkz-YRnTS0FC63W9NtxwJvmq84gR7ckq6IArKj7YHJGVYykIIF-NE9gIdL4TwSBl7yLmAtrTFNcTd7cESyEso_2Qm4-J5fm0_-U8De4wutiTmierje6AFOuETt1Q3AYqEW4fmslAJL6oNaJESLQM8tLd6wI5X5uxM1gOfReg5FdaB9GJHk6RNfTOItkb5LS8a3IuO-kYQP3GEO3whUaWEJ5iY3STTRVJu3HXJnusINr1wJCcVLm2MLAlK8nERAylyIvDWBBA-9f7AWi_lSte2T_QtSEbfzfWXOYIL0mwc6ReKV6S_Lw47f4gzp4gD-ubIbk4NZrWjdocp3UrrwNQBjSz_2LO0qpwIbXhC7apWanVFUXjv_wKtiIzGegmcpjl4rZGqt7SnDCvjmqpKZ7Ue5ct3etWmyUQwUDcsuAiYez3JcvOXBmx5K5WS_FT1yubRqStQRQk8SFR3AOF9_FEYGITaKt0HP0X28j_CCSy85dvfnsFopjFEzKfFRbCBM5GvoAxZkHe_y0LB01Yov13VkzwN5eGJYSoUz47-AXyHoV3xDMWZ4DvvVRNrt3cZZXoSBsYn7-HJvh3uf6ENJwryX4veDek9XmE8w9KnJLxNzqv8VL6XrKqgHve04QYB4BsAzxCwG4OcmL955tfTK8nc8hXLctC8ZR9WC-pLpW647-fxStu34oPYx5fEieo9XvTD_w34pdBk00cDvYwZjYvU8LuDOnLC-L3vb6yx3nEzGNM-PJzrX9RPPm0nygnOu2RNIb9G_OE7dLP7JO1iacZV3kscjSRy14y5nrmIR3V7TJJHfdoHo7qGBLJ0slvVzeLtkq4WNyYrwxB3pm0W5GHX-yT6SRf&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "44"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HfUwztIl6pxZTkcBNW08AWw4y88WjR280h6oEzv4jE4ppN4Dqt9CjREV_aWBnZDKXVRUGpueqpiCz3W7Ohh-VQm2IsqNDWzPbyTuduOhUIiZ-KCmROPnl-Rp6PaHdjcaDVUQr-rerEDR6lea-rsOX3TSqkA3CnlWlGqXXinBsUcixwmJZeuBs0f53F4LVIvx3rgLBSqFD3yGhEPQgTMFMaRTJNmgcP_Y4V2J8RI24o0Pb-Xo8sVRKae1ZBRoxqr_0b_2orXwGOtwMmzJ3GHi_RIGFT_hBWOdAhJhvmvI7J1IF3qVKtLSDvZdN3s6TPAWcthzBfhXf9lqRVS9fGqmFYz92Zz5kyOW8UYbqBoBzHWTIKIbGsv2V9wV-8URvVIwTsdKNfF3DGg8qeZh6T2ejvjLm4quQz3v5zySU3pg2tJUvJ-3cNDTYInNFC962MtPypsSaJU2fxHILmbv4IhjWZ-MdfJDU5OjcZVbOPq535kzrr25k67u7-b-t2JiBkwXIHVSE4Gbio5_3u8e_6G1B3Sn0c4fPPbLNaUBdb-m53j5T_tn_FD5kfAV-zuKrSxqOIYUgLkwgmaGLhOtoY06EofxdWLHOPIB16MxS-Eom8jYn5mY0o2a13eR3CekxrHnmIH0b1Hw90mF1PXp81ATLvz4H9TtHpxs4XimRtwEAcBK7kavv6F9Ji9WcU6qPHjRd9-xl0n2WYF3xbI9lhm94xS3nrvVoTRTA6oS4_SLIYelELUs8KL0PqpZjb7bmpuXyku9Plprj2yn5kZPkwnuJ42rTKyXgcNi7pz-nXXBeax14M37Ew8clK7LO-IcEV4Eqa5elPsVsUi7s6Xi9Q2Fqhv2OPYBEN471qO8HMkFr_m9gX1NWiFh_IF55SLujoiTvLM3CJfcJ-SO5vCrSIXuUQOyovY5NsliuMUlrmSaGOk8TXE152DvboIuPOXTjj2kPNvu1f8Rbo_sab6tPXvgQt3TwFnfdHynoTKGCKs-SgMCVH_PAcJwHO2vQWfy2F401&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "51.8"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "6014",
+                  "duration": 9900,
+                  "carrier": {
+                    "code": "NT",
+                    "name": "Binter Canarias"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "LPA",
+                      "name": "Gran Canaria"
+                    },
+                    "localTime": "2026-10-06T19:45:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T23:30:00"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiSTI6MTYzMjpMUEE6MTc5MTI2NzkwMDpNQUQ6MTc5MTI3NzgwMDplY29ub215OkZhbHNlOjo6STIiLCJwcmljZSI6IjQ1In0=",
+          "duration": 9900,
+          "pnrCount": 1,
+          "price": {
+            "amount": "45"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 1,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "45"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=Hg_ZTj2CbMgJYULyekHFb1mF6ueghkgN19L_9g1UVzwqtpgzCcdW5Yjw71GtBXQi8ov93A33AD3O1Q5FyQaMNcoeBItDpceGHeuW37yYdF4KnMOmsD3nIM2RLJsbcb5lO1lo2BliBYh46jwbhjvs9BXihg0TqiKUK1E3-hctGEDyT1WRrg8AFRfPNoTVYFol3Y5jqq0vIHohUNnx8TrnTh8VbdGNh5UrIWXMKMiWdAmgUBcwJEE4ZBSdDH58K-zcMAiiM_safcbkRK5lq9Na-1vsiM9MH07_Ly3IYvK8hVNr6WNw-wFfjBH2-OyHdFjBVe0AVM-6Z-NB8SMSCB7kJNxsWxAfqsj3qsBE-xFl0zolzFmKZnwPaVqhI1aNpIwuEFh-Lj9CY7LMYyVCqhJNohU4qLGW9kBulwIFq_mRb-O_U-0Ep8U_0-4b6LROWGLJ2EsLkaUXq2K_S7PrA1QVFj5nIYmlDmE2lDCOy3-eGVe4fWdeiFbEB7PNmgiQS8mJR3AD-pTFEnWVBfuZii1XSHtLKTaHzn3_Asg1hUTM1-TFIMDDc5x-LKf7mvf6aiTgMfAFD3EDF5kbz6ka21dQ2o7bgBX5lfPT2ZaoyZrZLwe95GAl7VRC2rWp0_kTcOn3Q1xvEKkwlp_rQsF0K5ud0gMadZ-BK56RDRqkkWk5YkuZu742-cMQadU1D72jjLlFfxOh03xGpLQl8xrTXROvygMVfxWV0U8lLcKa-gC6DB2XcAz1P-b7h4PGQdyFallGqu2Kjl7pcqtRs7yqWrJThYGaK0WpiLuQFC2EYQQ6uy7R0ZaHKYMZ8gofPAMOHABJAkLbI7vxfkQze0GMWQ1MqcMemFG7wGEB6udeYNwTxSrOchAk52ptrqdgYDdhD1ZlgY2vS15OgDWOa6vUIy2rtieSMExNWvZ-BGZqDoETOfuHWAEsxjNoQn0D3nL81NWcb&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "45"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HopSB-sC4A8iybU7Q-BD155JdHK7FL_3txVl5sQT66EwNfdG-QiJcj9ZqVcm_fFQC2PwaEhCA2DOGU4NOTJ4AZg-LSyV4VfirgxM60J27YcBQPc2b4eAAH9QQG_m9ATdna8HYEVKY9RprECyYbOKXukByS7wJ__sSYEhzXuB9Bsz4xV5CAiAoUSV2iF4ZcX3Rvmj3duf2XhXOCLz-mQ_LQIZDl-prw1i5Uttha-3aqiSB3lRPtrex8xvulHp-EUxnkhA4463fAKVXSL-85mDFqMxv6_vywFy3apAdMwo_EzSXnH0KY7-EbKG5NCU-CitTkA_jzyanNktHe4TQ7-FpawxpA2uutUhLY-5MEvQnIcV9JRkOoLvYrB3C7BmhfIVjmxdMnpURmbT4UocP6CGcpXmYDbLtAzVrb55s1ub46vXm7vbJe4Nh0gTYXPTVQcVri-GulGaMasjxBZLTSV59FysxIOLDfjp0t8Oqdp_Rmx8tY798PH6G5jbF-T6T2p3GXanYJ5qSVbTjTvt5e8ZM8BaNUuDoMaF5QclCoY2eelFXwKr1DmTxwB9un2BUEAU-8Y0pwrniGK5RuiABMRxop_-lP1LnHAldUoreS2KDjba8w9PDJedglbsQhbCVBVVwpe8ZRYljtbkCQ72t2457j6PlXTvsZ_e8bTFNXdmTLP-xpqSTFcgdPeJ0fV47x2folhtKHuTWPh80swYgKc9nnp6Xk_QphXMZScb37K8bBZN2_o6wV5yN8RwVUf-eN_-2RMW3vI9jJs-6cO-UPOEq3z8wAQH-KB26yQaYjuNU2cA_IU5KFdkavxyqbg866JLPhcwOzfCV5eagVLzQlFSL3amIc6CFfCyvl-wAxiI3k3k_y8078x784HuapunJV6BDAuJzKjjaxbo8etbS5zOzWeY480oqULC9_Oo2phySEZoN0UdX8mFY2PeUefPeXryKnXD2ZtY0Jc9-fvyd8tIJfUAcMkSV9MRoWtFOt8nIVRVl-IqSOL27GAiaEW_OknZW&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "52.842"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "1632",
+                  "duration": 9900,
+                  "carrier": {
+                    "code": "I2",
+                    "name": "Iberia Express"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "LPA",
+                      "name": "Gran Canaria"
+                    },
+                    "localTime": "2026-10-06T07:25:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T11:10:00"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

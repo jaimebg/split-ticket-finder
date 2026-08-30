@@ -5,14 +5,13 @@ import base64
 
 import pytest
 
-from scraper import (
+from models import fmt_dur, generate_dates
+from providers.google import (
     FlightResult,
     ParseError,
     _varint,
     build_url,
     encode_tfs,
-    fmt_dur,
-    generate_dates,
     parse_flights,
 )
 

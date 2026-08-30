@@ -1,0 +1,483 @@
+{
+  "data": {
+    "onewayItineraries": {
+      "__typename": "Itineraries",
+      "itineraries": [
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiRVk6MTA0Ok1BRDoxNzkxMzE2MjAwOkFVSDoxNzkxMzQxMTAwOmVjb25vbXk6RmFsc2U6OjpFWXxFWTo0ODY6QVVIOjE3OTEzNDcxMDA6S1VMOjE3OTEzNzM1MDA6ZWNvbm9teTpGYWxzZTo6OkVZfEFLOjE3MDpLVUw6MTc5MTM5OTMwMDpLSEg6MTc5MTQxNTgwMDplY29ub215OlRydWU6OlRydWU6QUt8R0s6MTg6S0hIOjE3OTE0MzkyMDA6TlJUOjE3OTE0NTE4MDA6ZWNvbm9teTpUcnVlOjpUcnVlOkdLIiwicHJpY2UiOiI1NTIifQ==",
+          "duration": 135600,
+          "pnrCount": 3,
+          "price": {
+            "amount": "552"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 1,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "174.303303"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HsySdi0rJR0n9D-bzx45o7W8qyPCAUVvdkWNIlkgFG2L4lojBkceAXfs0Hff6DogpT9uebcGWK96CVi_yZFC_6s3GUhWDszEDrxRQ0r9IC1wB25N5f3XUk-CAGJ4d7ZhxCpDUcm-puPAKEt90yxA-RQAYXWytxEk9qolRIpNsTlF8Pn6bO0gvK76ZUNMR14AdOxLWGmt6WjRQmZvFeU2yMgnQgNfz0TePESF0xZjJs8AG18afW6dl-jMcZh_c67JOP9T6TS3x3yzLie3YeKSENJuvKga6g-_dmRcCRsFj9mQRFsGyEozejSafPQR4xak9Yda8vohKiy43r1XmqZqOn9OVCeo_OfSV8gEsNIBN97zVHsmm_cSI6jeCcdvw37uMmlDSTgW5NjiZXjzGpx4-zVWdvQymDuHU91UKTpujAbLj-7Pejhq3AWo8nBQZ_N4-GFW24jV8mGBCN_cgAZ9rHZnW_oI9iRWgH5yfmgm0u9UvgviMSoEJidK_GWGa74Q7l54WMX_I8fpomCNaP_oDALVRDzoSNG9OlQZDU0wfxeBjIcW1Snw3RaxKRBWGpVXjLrybvgi7TSduZf9sX5kq1TUwpInsZdgaBXLbk_dVPFmHT8V94cnEgqBLgFRxfiItuVmSKkmHXFjWn1j7u2zVHAdhY510IZsFU5-rF_xIJTxdm6Ab4QBNHcFp4jNnCCmlEfnLi7FyK29153iqP6N1fn0PJzI-RrYpFG1knr0tg0HXt5D7BSFCH_WoHHOlai8M3ywAoXZEeMPfkjQB1aS7XIBVzAtqe5XVJpstM7JdrBTg0Tz-OzHSn5Ucb3rP2DqqNHS39XcbV0-bLyr0Eek4h5_kzAlEzcL-pSovX1ccRzNV3_nFoYc43GkUaGmBLL291Q4WJxHa5O9oHsaVnI2V3FKiN_CLC1OE2z4DA4EAsRQLi-qgoEPWFWOlGUKW64jcovHeVZmdJyXqMP9wX2mJDB59I9ggI-RptLoLoij4OuoJl2K6dBn7ejTgUJTgHqOE85x5372XhMks7xQYRo1XmlJBnzzNOW6opItnlmDXaWin_AganEgEQProDfELcuOXcfXYgJpazcvcH9FVh2Fx9_xShSojHh9jI73KIx_m2MZB9mvmL-AnyXdgIqpCcjUM0o1jNDmUynDKSJyGk7S4Q3gUzVygA0Z6jHH8BXb3yNO9azs31yPz8gQUA4t4TiwyLkZwFFv8c4RbquFpRxDtQmHuUOn7-3904nl7V_tCXoBUsavmmJ-Hw3MOwvhAXeK1erUq3aq8BV2_2R7XAxa2tJeAkVV8uVFFOMOccfRaYYo%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "552"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=Hz0e_ZVHU6y7SjRlS2QgYW7UquxaOiNApca512ndjCeWrneAD3nTiBPfh1Qu17E7-iVzkvMF8aYkG5jg7PHPw0_RUjwVCCYXA2YSyjky4OcY_TnPsTH5didTxmsLVPHXAtqgpSTz1iyliLZ6oHTlFTdQ_n5Izzb0IDJt22wwuds-y9a2g4FoD0CqFLKwpTgwPvvtLx55BVEBeaOYMQDMWuIfQoh5ItU8oFWMA4Pp-GF7XJFbrbNqdnXLK4coFiihkXLr-pWYE801mzW4EJf5kKbk5h6y9rlCKBd_-NhgfbpOO-rhHqylxGqg7Dg8gcR4DgvFr0bAMJRmjnqoJdoh3_hTDqKCH-si8si7eVC5lRxi6uOsF7SswvaLHpVighGAT-5Gxv3ZtqL8IyZWPeWzW83G6zMqHVRyAVtvvKhCwIkpY4TlS5w9gCeBeLs82IRZLT32B25Y-6COUKrhMt6LwlV7nbqXMn14T1a7bTU5cMJ9fYIU_h0GuO4gaY-WP7k_ytvUywD5ONF6mvH8DvVPS03zkK6AoIDEo7ldotOk96r50vo2xhVOqGMNSBIOzD_IiuxL0FYtAP8Fe0bCPD9vCcaFqs3ZN3tKQ1-4fqvi4LyC33Ar0ai730tiK2X9flWWvJ_md43uwaIYYAV8K20Zwezcyd0IGJJJP_oTJbyRVRuMZxsI42wij11_zhl1_B5gZGwTV3Iahm--5eZoROYGKHyMFXmVVD60z56Cd5ga4JRSFZZpscYvllLj3fTd5UWDCU619F-cx8iw7jrqQxGDCEhDaXIFQSgmlJq8ZRslr83b6azQvYrs7BzVPuk9EBTQG_uAt0uOHzJ71VtmPdJoJBeB-cW6bm7clqZ9ES8PrjHYVOdNzmRLJl4QmAfGQXnElK_72tOwp7gtRsivTgB5rtTRvsto6wT_op1xH_v1hST-6xkjxA83ha1CbF7-j5LTaTkl0LWkyBoSU5YFmouvuJicZGHT3bvVbpd5P61x76TLgbr5WO9Q3xzwIr9_fjYkPE2brbxh12PSEVRIDspJNC9QQjKZUB6kWXgoPAAaUjEMM23vLmq-VICXOJa3mE_YvkRVZQEXusbQZhMuCO_4NLWO5d4u5UcR3LDvp0-UHBKObgupFjhB5lg2CXnkzA8nPjHDjxWSvXTd42FzPr0xKa4oRW3J3VgjZ9CveeqnXhddI6Wi2W0ntbvG0bQvKCeLi5jitO89fTb0w1qowlkAZceVO2SC-AtHhevqnchWNewptKgp5JyAJ6JVWtcBEbzPbUlZCGaCpiudNGGhJ1nXWDMlwCe1N2iMq7RQRXnRIp44%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "692.6564"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "104",
+                  "duration": 24900,
+                  "carrier": {
+                    "code": "EY",
+                    "name": "Etihad Airways"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T21:50:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "AUH",
+                      "name": "Zayed International Airport"
+                    },
+                    "localTime": "2026-10-07T06:45:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 6000,
+                  "isStationChange": false,
+                  "isBaggageRecheck": false
+                },
+                "segment": {
+                  "code": "486",
+                  "duration": 26400,
+                  "carrier": {
+                    "code": "EY",
+                    "name": "Etihad Airways"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "AUH",
+                      "name": "Zayed International Airport"
+                    },
+                    "localTime": "2026-10-07T08:25:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "KUL",
+                      "name": "Kuala Lumpur International"
+                    },
+                    "localTime": "2026-10-07T19:45:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 25800,
+                  "isStationChange": false,
+                  "isBaggageRecheck": true
+                },
+                "segment": {
+                  "code": "170",
+                  "duration": 16500,
+                  "carrier": {
+                    "code": "AK",
+                    "name": "AirAsia"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "KUL",
+                      "name": "Kuala Lumpur International"
+                    },
+                    "localTime": "2026-10-08T02:55:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "KHH",
+                      "name": "Kaohsiung International"
+                    },
+                    "localTime": "2026-10-08T07:30:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 23400,
+                  "isStationChange": false,
+                  "isBaggageRecheck": true
+                },
+                "segment": {
+                  "code": "18",
+                  "duration": 12600,
+                  "carrier": {
+                    "code": "GK",
+                    "name": "Jetstar Japan"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "KHH",
+                      "name": "Kaohsiung International"
+                    },
+                    "localTime": "2026-10-08T14:00:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "NRT",
+                      "name": "Narita International"
+                    },
+                    "localTime": "2026-10-08T18:30:00"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiUEM6MTEwMDpNQUQ6MTc5MTI4OTgwMDpTQVc6MTc5MTMwNDgwMDplY29ub215OkZhbHNlOjo6UEN8UEM6ODMwOlNBVzoxNzkxMzEyMzAwOk1DVDoxNzkxMzI5NDAwOmVjb25vbXk6RmFsc2U6OjpQQ3xXWTo4NDM6TUNUOjE3OTEzNTAxMDA6TU5MOjE3OTEzODEwMDA6ZWNvbm9teTpUcnVlOjpUcnVlOldZfDVKOjUwNTQ6TU5MOjE3OTE0MTM0MDA6TlJUOjE3OTE0Mjk5MDA6ZWNvbm9teTpUcnVlOjpUcnVlOjVKIiwicHJpY2UiOiI1NjYifQ==",
+          "duration": 140100,
+          "pnrCount": 3,
+          "price": {
+            "amount": "566"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 0,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "118.471218"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HnCDtUCAmCdCDeXCZdspXPmCbvwtm3pwhmEs5Sx9awI_iFvkEf6smSmLkDXO4hAJpFMbAaE1T4FGb9tAgLhxxsp5p9gxKsYO_OwpLBfkb01Z6S--f9B9_RriSxo9_cxpntR7p8fT4PrkLrZ1ihx4yZXZu0O8GWV7L_JjvJcAvlTfjUoRjKq-cG3SpvwuW5EH6wGEOJebDBdCCiBkkeWjqOeP7XHntOKqqFfzX8uw8BXVmwhTaDYNN4zpLgI1a5cP2mXt1nQcw5m5oFL1ag1FKeO9RerNfCntlE55Uqr0p34YMuyNEx-odjLpI_v8akQa8SPQQAzjRgRkC8QO3g8Lsp1xRgOWqrGQJEcxPXjxAu28pFNc3LCUXVSHkyOCObwJQX6PjYNOC4vVZwmouMH2Cxyo-1ARzJDoE9vwXhyVkNQnp05DT3MeqwnaeCjJiHuBx-teCAHZ0tZoYEo2h83nUBMpRDAezF4KEIPXggmiS6qYhiRJz5XCoAPbcwUgBrHjpVbJyJqlHG0fFGLA53c09OFCJxBEpveD0beDuYvwUa1K-rlgCp0SX_dFPFiMmOP6ugcsvVQLuoRnh4tGJ04zByUnqSQmv-Nk4v6rHJZ7YPXppF61B-EVegmmGlbu6jl2QgDZdqcbHc62fxaG3cWXpg2mJ_2BVKYjJhaqV8ijXPxYgnO0EmZLBRRc6iUGx_Bdwsq9a5r2gd3t2VBYFYa2CpoBKRyY9j4US3PMf_qv-GDdYdGx4_oUVnfXq_bTGizsCvIvpI_ILtGWdzGbJHAtoc3dchWbdoMpfjNHi9wBW-m7QGNHswd-j3zSBwSMCQy21jZM2wItpmcSHXt0YbWvfUDLxhgigA9vaZfgYBKb_gNkgzrbe5DESIPx4bu0rO2qKwKEiEnVIwrxaUBKa1qUwk_pAA91ureQX2d27zfwZNDamwmC8SjK9GKQR7NmuDkSnWkarz_iCpl-AyEtkLwIys-Nd7eBTm35vY8AE4myWci3h5rnBxY-UFBsXAdBB-Ep1-nKlBPx_9Lh25KL46lh8GolQSfSlYPZs9BKAfl8JiaJbjHcLt7yUp646Xm7KIJolaI9AWHkHTvyQV5oKzzLL5WYWR3Klf716CVyTlQo3hnJxUkjvY9Ia4M9DXgopPoANTWuzMZm80Gf5i_EFbdTltxM1bv5gi7Aaz8PBJ8DFEeowONT9oQpDmvMEJs2BGhPAKRZoCcqVcmC-qQrF-YPh2Khy0Ao9AGk1vkkYyhyuhjs0YCRY-msqno6cuf1r6_T1nWvzGAEyK9oAt6ZHqgdQKfwWq1TTtFmbaJzIxEXZWo_IeMqMgbZ8Wi61Aq_4J9lu5qy_NDppHbKJS-OvEUWfoA%3D%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "566"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HA18BrSFhg1ZgXhZUSP1G-6GEs5JfXULzJmlEvESdHXfAaaWwEHcwAF8TB8VEJbm2MWlQKNWYbJ1eV_nQOKUxHdRArK_IVBZrDTyeUDR8bFoUIgTZGBDcxGiCnMKfcKA0cBvaH1gTR29QiAZKPURsUgELTYrD5qrk1eKr8AaAeKEuXi_9XNKY95HgNpwS1avKRXnDZYqaUUCprq82tN-geka2kyRxwF1NAeUnsBaz-J2zfQL8n53qW0ubjA0yFAG6UKa8kn5-rti0xNj_NrVWU7tuU2t0P1onrDJOws5U9NRdp9yNllS9lXi-Jaf3E4Sxas5WUWQ1ka0pcq-jdTWS0WJlhyFBdMOiXA1uAwoabQI4JQvh7lQPJUUE1OsL4ey0XrKkT6UByFqtdA6NHIiU1Cv7IS9f_y6Hp6zhfwqBXMnSuLd0LuVXuRSzcqgsRoKv4oj0GWgGMajtMY8gEBNFV-HOoO5IeJ_OJqLq-tB2A5uCEhpYe3oE0eP8kptdVusM-aAY_fpq9rmOcYle4caGmDvXXSoWVfkyTFd-MXGewO3Q4dmMMtvzX9DcWM4RtfawN7k7vz5wBgmiAb7f6nYi2xNrwU_fulRL2ts200iQECsNrOhfbR_aBYwB_I6hStC0dGx6w8Webe9AGHyiaauT0Eg_8B9IIZIuqenlmjDcJhFFLbF7jblhz0FaI7brLerI6MDjFutIM8ldIR0u0b-WpbcxT9WOGDotTcWXzjvJ2_Arwr4Hl50RmjTRgh0Y0JZHPj5pevkzJCj0qQx-W7eCy1h3dKlFcd5WOIkRTxcjgna8nCI2GUaDGbNxwuuoydfwBBT-P1HvLwAetBKPDe6fcuCTP3649b8vFJjw402gQtw7uI1zO_4HLbUzK8xBoHcFF-YBdFwv9P9cVfGcgrgSCoujhLJ7klpld9H7BGY2-IibfsdoLn4vBOqP-O_GCJruEB1yB2le76ar46-BX8PYy6afvkWDdl21zCPuE4fSePOZ-3-FYVXb4s4nf3QlB5kiROK_y_DhNhM0wLKFSAPMYM_EpFjm4IC0msRCLc283Krm1zFyHXHIegpE025u9FXVZsV5hpOJREeNwAfORbtR1TFK2aFLSuLvhd4ok_D7Tr9SGa90UmMjvkbwEWK-7fyp6d6VcZlgc6Uj-fjYdvUSaf9UtTWBtIld0XEnXSJ3f5satU_xQc5qzc3rJLRZbwplwwobDwrI_dvpSwP25PgqNhYf_7n_0ovyl0fBaPuc-pWaT4ZKyrkf-lNRqxHWqwdKCjSvm3R1jAFiL3dP0lFflSUIXIPItryY6GGiEPS9zGvyhHDwEmmp0cyTthkiEgJvhHs8k0d7oyXyc0fncTKWaA%3D%3D&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "710.0764"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "1100",
+                  "duration": 15000,
+                  "carrier": {
+                    "code": "PC",
+                    "name": "Pegasus"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T14:30:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "SAW",
+                      "name": "Sabiha Gökçen International"
+                    },
+                    "localTime": "2026-10-06T19:40:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 7500,
+                  "isStationChange": false,
+                  "isBaggageRecheck": false
+                },
+                "segment": {
+                  "code": "830",
+                  "duration": 17100,
+                  "carrier": {
+                    "code": "PC",
+                    "name": "Pegasus"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "SAW",
+                      "name": "Sabiha Gökçen International"
+                    },
+                    "localTime": "2026-10-06T21:45:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MCT",
+                      "name": "Muscat International"
+                    },
+                    "localTime": "2026-10-07T03:30:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 20700,
+                  "isStationChange": false,
+                  "isBaggageRecheck": true
+                },
+                "segment": {
+                  "code": "843",
+                  "duration": 30900,
+                  "carrier": {
+                    "code": "WY",
+                    "name": "Oman Air"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "MCT",
+                      "name": "Muscat International"
+                    },
+                    "localTime": "2026-10-07T09:15:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "MNL",
+                      "name": "Ninoy Aquino International"
+                    },
+                    "localTime": "2026-10-07T21:50:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 32400,
+                  "isStationChange": false,
+                  "isBaggageRecheck": true
+                },
+                "segment": {
+                  "code": "5054",
+                  "duration": 16500,
+                  "carrier": {
+                    "code": "5J",
+                    "name": "Cebu Pacific"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "MNL",
+                      "name": "Ninoy Aquino International"
+                    },
+                    "localTime": "2026-10-08T06:50:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "NRT",
+                      "name": "Narita International"
+                    },
+                    "localTime": "2026-10-08T12:25:00"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "ItineraryOneWay:eyJwcm92aWRlcnMiOiJLSVdJLUJBU0lDOktJV0kiLCJyb3V0ZV9kYXRhIjoiRVk6MTAyOk1BRDoxNzkxMjc2MzAwOkFVSDoxNzkxMzAxMjAwOmVjb25vbXk6RmFsc2U6OjpFWXxFWTo0ODg6QVVIOjE3OTEzMDYwMDA6S1VMOjE3OTEzMzI3MDA6ZWNvbm9teTpGYWxzZTo6OkVZfFZKOjE4MTQ6S1VMOjE3OTEzNTQ2MDA6U0dOOjE3OTEzNjA5MDA6ZWNvbm9teTpUcnVlOjpUcnVlOlZKfFZKOjgyMjpTR046MTc5MTM5MDkwMDpOUlQ6MTc5MTQxMzcwMDplY29ub215OkZhbHNlOjo6VkoiLCJwcmljZSI6IjU3MyJ9",
+          "duration": 137400,
+          "pnrCount": 2,
+          "price": {
+            "amount": "573"
+          },
+          "provider": {
+            "name": "Kiwi.com"
+          },
+          "bagsInfo": {
+            "includedHandBags": 1,
+            "includedCheckedBags": 0,
+            "checkedBagTiers": [
+              {
+                "tierPrice": {
+                  "amount": "135.904473"
+                }
+              }
+            ]
+          },
+          "bookingOptions": {
+            "edges": [
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=H0oxSraWSbVQWzB6A8KG4qGVKdrcr8rhYhWNsvxdz80H2-VTWrGx2zCZmjn-DUpFmTMX_lSPnYGG3vSVlC_N-cVqZ8szgKKej8-Xu4oGQX09wDA8Mn4phrQQx9TQlK1h6Ahldw_ZOUYLJAJn8-5SxkA7YMzYZRvsfs-lbukL3M9qFYcG2180U5o-FXqcrwLQJC2OImyJHxfw-LAvEMYkroGpnBzYK1wIwVFc7sGO6YHSwLDcIW3enJmsxi2SKwqtE6FeaDfrXVAnKxpm9Ja0y0_4W4Gib92ojdllsqLVqn9uIDEjl_GXaGTMwbhzFLYlbcbixfEBPuXpjcq3QTUOzEDFlbUOI9VA2mKSj12gsmQQSRU9AaUGQeNlJMcvF_fGQeKMVuEovf0jWzYbESMyLp5U_1zKjMxCbqQWPwadxieqFEs4b7kaO19lT56SW4hN26LSpGHSJ9QRnH7orv5olDNVx13VrJ22Ji2upMxq4JQ_BCu_n1TwRk4qyR6EJvujOcCzh_SqZBPmg8hAtRVhx5zCEY8nqJS8i_XVOUTGOMNokDNu6QqKP1zLyB61DO1ffyiCCbbMXr65UHSt_jl_TFoYV064hGwuQ4y9rQnOgED9659QBaSCYvMzeGiIcTfKkFPfGtLYY6LrpoH0dIkDoTE9AwcWWZtzQ-ra96ShymtGjfH47GqnPvhPq84UaE1tc54zPY8t6MLe4OMuk4m531ck-TMXvStvooNK5QNi83IHes4qSwc8Asi_pzzcc4JspjESlXc5JgQTYvdELRJOxC7z2IwmPALbUMyhHT-Ko-Kbmf-QEa9L1CSvfiZHiAdlvk6P8juOW0isNy8J0_gbrju_eo7W0LT8_kveRAdJB3K6QLmN-MKqBkK1GfUod0xjdlUqPCaJVI1V_nODx_5MWtrxReC7UCCQ3EAOKeIKqpzlNPl2ELirAskDVttx_0vYSJa5TJgDnbJWNjY2NK7msDzlVkEMjZaoSBEezM2B1fkpSjbi52EIx8dMFrBdcIJxQ1DxZziLIhYbqRSWlyvCYqWnswH1KADUjeDlBBNlrRMobydql5SxuMSY_3e711ZFfxETRzkAOXrO4KoxAQNBUSQ8MbOCAVU47x21Ccs77dYcCCGvzMFXZklmdpLrEmgzUTDn-hx-6tNWrQxqNl2k_XlH_A3F0-BODfJTpOFPVVCinG3nZDSq7tepvmRGtnLz2wUaWEg-n68BvLtCGEgUMkWMIKsCspUnGFv7bFaa7kKXJfacZY5yoHnYvCE5ZTF2I&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "573"
+                  }
+                }
+              },
+              {
+                "node": {
+                  "bookingUrl": "/en/booking/?direct=true&locale=en&currency=eur&passengers=1-0-0&token=HG5wv-hI9N2JiGf1cW1dRNoYGs6-PBkSr4X_MXHO6E5lYA7qu48bAcoiDfamYI4uhsfvSJdqNbs-o8BmR4D5OS0b7MYzWH7a5G-Ld6X8pPdcHdH8u3CfOb_qkdE7ObuDTkLtwka1JjyL6Zn-ug9A6_nfNVsXDlArHtCcNMWky_Z3sbBw_bdc4Pr6HIK0c3Drhl-N9vN5H_Iw3kNdjXAvjl2HG9wXn4FC3_xyJbMmgx157DluGtP8x-CajSSHdjcSn80NNK02QPM90ewE00k5OkiI3MlAu_BfLkDB-BDcPEpq9M5bwHU5BIB4DEpd0vTg9qrEn5BuVSnA0dTe0SIvFsoHVH1qluC51Q0Da7YXuS3GwEmuJXnidTfTkf0yqQpdnMrJIpCT9CuOgzKSz6IQWoIaMjK30hMjd639nvZPZvCOe05nC4-IxvZ1oySvp32dNELccNpB9jccdsRnQoC3e5szhsS_DmE-Xp_x_f60qSYhqzN-u0Ku1ConqIRwlKKfyoq4Yi5g4U1_NIAMHLWKAjkdOUSaPJvUqR68jvCCzAVTIdftnEi7XVQ14bBWWvgBmcdd7CQ_zeiXKHNfJdFx0Xs7z5JkccmCY2VqHn09Mpu7MEoVZn7d_6nC1v65lH8OcGrRM6j0gEHbU9V7m27Dob1h2PwddBrez-CkB6BP4e-hWRpQCY6nRZCoJHUYcS4LbtUR8tNxubA0vdvYn7Ycne8licO2_jMgxeDfp1ahJs49tViSdHM4y6OODMya1RImEVByLe3iR0ZVZJSHpuKIyisM0m7D_HikT4BruSKZLp9jrdPFt8zEHVUHQeCtRRX4UVPYGIYeUbrH1BOjPwLkkc89lpuzOL6ekqCha7tUSrHLIKvpIFrJ-c4vkccGjYTimgbCbWwQQUzpGOLZ4yv2kfK-sLO7i8nKOzyjsZzgJkyfX7getWsPG4LBLBF_m2ApPSy-gdQSmZkMSW7mpG9CNMqOjuY6OYsuKWSkcfme4GXt4k2VsOjYnzNvpXdnxqVllpcXCXu7_n5RPWRgzvifoA0QiQ2ZYmo6tGCH40ixNDRq0VFwp43x17fYC1FT3XLiAyGJkrSlvzi0epYkb_O-hvlvC4dqjHaKEfj4uCyWawaroE4a9VHO3tuoicQAStPsrLvbpmqfj_AC8A3J8M910S4uXJJSEmOKNvLTiwvBV7J8KsTLQaa43FhUUJkv60OVmOWiJxxiAiYwvfMIpIsDmncX1j_K2jeetQsSwFxL5VgfxrhEUwwQzeo_8mos_NgDW&searchType=oneWay&searchBags=0.0",
+                  "price": {
+                    "amount": "718.844"
+                  }
+                }
+              }
+            ]
+          },
+          "sector": {
+            "sectorSegments": [
+              {
+                "layover": null,
+                "segment": {
+                  "code": "102",
+                  "duration": 24900,
+                  "carrier": {
+                    "code": "EY",
+                    "name": "Etihad Airways"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "MAD",
+                      "name": "Adolfo Suárez Madrid–Barajas"
+                    },
+                    "localTime": "2026-10-06T10:45:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "AUH",
+                      "name": "Zayed International Airport"
+                    },
+                    "localTime": "2026-10-06T19:40:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 4800,
+                  "isStationChange": false,
+                  "isBaggageRecheck": false
+                },
+                "segment": {
+                  "code": "488",
+                  "duration": 26700,
+                  "carrier": {
+                    "code": "EY",
+                    "name": "Etihad Airways"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "AUH",
+                      "name": "Zayed International Airport"
+                    },
+                    "localTime": "2026-10-06T21:00:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "KUL",
+                      "name": "Kuala Lumpur International"
+                    },
+                    "localTime": "2026-10-07T08:25:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 21900,
+                  "isStationChange": false,
+                  "isBaggageRecheck": true
+                },
+                "segment": {
+                  "code": "1814",
+                  "duration": 6300,
+                  "carrier": {
+                    "code": "VJ",
+                    "name": "VietJet Air"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "KUL",
+                      "name": "Kuala Lumpur International"
+                    },
+                    "localTime": "2026-10-07T14:30:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "SGN",
+                      "name": "Tan Son Nhat International"
+                    },
+                    "localTime": "2026-10-07T15:15:00"
+                  }
+                }
+              },
+              {
+                "layover": {
+                  "duration": 30000,
+                  "isStationChange": false,
+                  "isBaggageRecheck": false
+                },
+                "segment": {
+                  "code": "822",
+                  "duration": 22800,
+                  "carrier": {
+                    "code": "VJ",
+                    "name": "VietJet Air"
+                  },
+                  "source": {
+                    "station": {
+                      "code": "SGN",
+                      "name": "Tan Son Nhat International"
+                    },
+                    "localTime": "2026-10-07T23:35:00"
+                  },
+                  "destination": {
+                    "station": {
+                      "code": "NRT",
+                      "name": "Narita International"
+                    },
+                    "localTime": "2026-10-08T07:55:00"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

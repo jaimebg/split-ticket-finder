@@ -1,0 +1,282 @@
+{
+  "data": {
+    "itineraryPricesCalendar": {
+      "__typename": "ItineraryPricesCalendar",
+      "currency": {
+        "code": "EUR"
+      },
+      "calendar": [
+        {
+          "date": "2026-10-01T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-02T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "48"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-03T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "45"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-04T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "48"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-05T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "32"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-06T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-07T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-08T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-09T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "74"
+            },
+            "rating": "EXPENSIVE"
+          }
+        },
+        {
+          "date": "2026-10-10T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "49"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-11T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "48"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-12T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "75"
+            },
+            "rating": "EXPENSIVE"
+          }
+        },
+        {
+          "date": "2026-10-13T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "49"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-14T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-15T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-16T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-17T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "32"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-18T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "41"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-19T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-20T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-21T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-22T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-23T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "29"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-24T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "37"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-25T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "42"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-26T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "41"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-27T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "37"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-28T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "35"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-29T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "36"
+            },
+            "rating": "AVERAGE"
+          }
+        },
+        {
+          "date": "2026-10-30T00:00:00",
+          "ratedPrice": {
+            "price": {
+              "amount": "75"
+            },
+            "rating": "EXPENSIVE"
+          }
+        }
+      ]
+    }
+  }
+}
