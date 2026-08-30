@@ -278,7 +278,11 @@ class KiwiProvider:
 
         segments: list[Segment] = []
         layovers: list[int] = []
-        bag_recheck = False
+        # Priority when combining layovers: True beats None (unknown) beats
+        # False. Starting at False is the identity element for that ordering
+        # -- it is also exactly the right answer for a direct flight, which
+        # never enters the loop body below at all.
+        bag_recheck: bool | None = False
         for entry in sector_segments:
             seg = _require(entry, "segment")
             carrier = _require(seg, "carrier")
@@ -296,8 +300,16 @@ class KiwiProvider:
             layover = entry.get("layover")
             if layover and layover.get("duration") is not None:
                 layovers.append(_minutes(layover["duration"]))
-                if layover.get("isBaggageRecheck"):
+                recheck = layover.get("isBaggageRecheck")
+                if recheck is True:
                     bag_recheck = True
+                elif recheck is None and bag_recheck is not True:
+                    # Kiwi did not answer for this layover. That must not be
+                    # read as "no recheck" (False) -- only an explicit False
+                    # earns that -- but a True already found elsewhere still
+                    # wins, since one confirmed recheck makes the itinerary
+                    # risky regardless of what other layovers don't say.
+                    bag_recheck = None
 
         # A sectorSegment's layover sits between it and the segment before it,
         # so the first entry structurally has none and every later one must.

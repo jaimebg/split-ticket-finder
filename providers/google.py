@@ -407,6 +407,10 @@ class GoogleProvider:
     Google's per-segment payload has nothing better to offer. Offer.airlines
     does carry real airline names, read from the top-level flight listing.
 
+    Offer.requires_bag_recheck also stays at its None default: Google's
+    payload carries no layover data at all, so it cannot say whether a
+    connection forces a bag re-check.
+
     LegQuery has five fields Google cannot honour the way Kiwi does:
 
       - max_stops and exclude_carriers ARE enforced, but client-side, after

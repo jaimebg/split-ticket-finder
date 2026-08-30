@@ -418,6 +418,72 @@ async def test_search_leg_reports_no_recheck_when_no_layover_needs_one(kiwi_fixt
     assert first.requires_bag_recheck is False
 
 
+# ── Baggage re-check aggregation (fix round 1, finding 1) ───────────────────
+#
+# isBaggageRecheck is a nullable Boolean in Kiwi's schema, so a layover can
+# report null (or omit the field) as well as True/False. Collapsing "unknown"
+# into False would under-warn about a self-transfer hazard -- the exact
+# defect this task exists to fix, reproduced one level down. The aggregation
+# rule, in priority order: True beats None (unknown) beats False; no
+# layovers at all (a direct flight) is False.
+
+
+async def test_search_leg_reports_unknown_recheck_when_its_only_layover_is_null(
+    kiwi_fixture,
+):
+    """A lone layover reporting null must yield None, not the False default."""
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+    itinerary = payload["data"]["onewayItineraries"]["itineraries"][0]
+    segments = itinerary["sector"]["sectorSegments"]
+    itinerary["sector"]["sectorSegments"] = segments[:2]
+    segments[1]["layover"]["isBaggageRecheck"] = None
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="MAD", dest="NRT", date="2026-10-06")
+    ))[0]
+    assert first.requires_bag_recheck is None
+
+
+async def test_search_leg_lets_a_confirmed_recheck_win_over_an_unknown_one(
+    kiwi_fixture,
+):
+    """One True and one null layover must yield True: a confirmed hazard wins."""
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+    itinerary = payload["data"]["onewayItineraries"]["itineraries"][0]
+    segments = itinerary["sector"]["sectorSegments"]
+    itinerary["sector"]["sectorSegments"] = segments[:3]
+    segments[1]["layover"]["isBaggageRecheck"] = None
+    # segments[2]["layover"]["isBaggageRecheck"] is already True in the fixture.
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="MAD", dest="NRT", date="2026-10-06")
+    ))[0]
+    assert first.requires_bag_recheck is True
+
+
+async def test_search_leg_reports_no_recheck_when_every_layover_says_so(kiwi_fixture):
+    """Every layover explicitly reporting False must yield False, not None."""
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+    itinerary = payload["data"]["onewayItineraries"]["itineraries"][0]
+    for entry in itinerary["sector"]["sectorSegments"]:
+        if entry.get("layover") is not None:
+            entry["layover"]["isBaggageRecheck"] = False
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="MAD", dest="NRT", date="2026-10-06")
+    ))[0]
+    assert first.requires_bag_recheck is False
+
+
 # ── Broken vs. empty (fix round 1, finding 2) ────────────────────────────────
 #
 # "Empty list means no flights, exception means broken" is the whole point of
