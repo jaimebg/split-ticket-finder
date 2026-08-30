@@ -8,7 +8,13 @@ import pytest
 
 from engine.fetch import LegFetcher
 from models import CancelToken, Progress, SearchCancelled
-from providers.base import LegQuery, Offer, ProviderFetchError, ProviderParseError
+from providers.base import (
+    LegQuery,
+    Offer,
+    ProviderError,
+    ProviderFetchError,
+    ProviderParseError,
+)
 
 
 def _offer(price: str) -> Offer:
@@ -94,6 +100,23 @@ async def test_fetch_errors_are_counted_separately():
     await fetcher.fetch_many([_q("LPA", "MAD", "2026-10-01")], phase="Phase 1")
     assert fetcher.fetch_errors == 1
     assert fetcher.parse_errors == 0
+
+
+async def test_bare_provider_error_propagates_and_is_not_counted():
+    """A bare ProviderError means the provider can't answer this *kind* of
+    query at all (e.g. GoogleProvider on children, non-ECONOMY cabin, or
+    min_layover) -- every leg would fail identically, so it must abort the
+    phase rather than being counted like a per-leg parse/fetch failure."""
+    provider = FakeProvider(error=ProviderError("cannot express this query"))
+    fetcher = LegFetcher(provider, concurrency=2, delay=0)
+
+    with pytest.raises(ProviderError):
+        await fetcher.fetch_many(
+            [_q("LPA", "MAD", f"2026-10-{d:02d}") for d in range(1, 5)], phase="Phase 1"
+        )
+
+    assert fetcher.parse_errors == 0
+    assert fetcher.fetch_errors == 0
 
 
 async def test_cancellation_stops_the_run_and_raises():

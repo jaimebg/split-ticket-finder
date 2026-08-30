@@ -74,6 +74,22 @@ class LegFetcher:
         async with self._semaphore:
             if self._cancel is not None:
                 self._cancel.raise_if_cancelled()
+            # Three kinds of failure reach this point, handled differently on
+            # purpose:
+            #
+            # - ProviderParseError / ProviderFetchError: this leg failed --
+            #   count it, drop it, keep going. Other legs may well succeed.
+            # - A bare ProviderError: the provider cannot answer this *kind*
+            #   of query at all (GoogleProvider raises it for children, a
+            #   non-ECONOMY cabin, and min_layover -- none of which its URL
+            #   encoding can express). Every leg in the phase would fail the
+            #   same way, so this is deliberately left uncaught here: it
+            #   propagates out of fetch_many and aborts the phase. Counting
+            #   it like a per-leg failure would report a misconfigured
+            #   search as "no flights found", which is exactly the
+            #   broken-looks-like-empty failure this codebase exists to
+            #   prevent. Do not add "except ProviderError" as a tidy-up.
+            # - SearchCancelled: a user decision; propagates.
             try:
                 return await self._provider.search_leg(query)
             except ProviderParseError as exc:
@@ -96,6 +112,8 @@ class LegFetcher:
     ) -> dict[LegKey, list[Offer]]:
         """Fetch every query concurrently, returning only legs with results."""
         if not queries:
+            # Deliberate: there is no work to cancel, so an empty query list
+            # returns {} rather than raising even if already cancelled.
             return {}
         if self._cancel is not None:
             self._cancel.raise_if_cancelled()
