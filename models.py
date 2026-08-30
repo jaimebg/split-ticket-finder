@@ -182,21 +182,29 @@ class Itinerary:
 
     @property
     def dom_price(self) -> Decimal:
-        if not self.confirmed:
-            return self.est_dom_price if self.est_dom_price is not None else Decimal(0)
-        total = self.dom_out.price
-        if self.dom_ret is not None:
-            total += self.dom_ret.price
-        return total
+        """Sum of the real domestic offers, or the estimate when there are none.
+
+        Keyed on offer presence, not on ``confirmed`` -- a round trip missing
+        only its return leg is still unconfirmed, but the outbound leg it
+        does have is a real price and must count, not fall through to an
+        unset estimate and read as free.
+        """
+        if self.dom_out is not None:
+            total = self.dom_out.price
+            if self.dom_ret is not None:
+                total += self.dom_ret.price
+            return total
+        return self.est_dom_price if self.est_dom_price is not None else Decimal(0)
 
     @property
     def onward_price(self) -> Decimal:
-        if not self.confirmed:
-            return self.est_onward_price if self.est_onward_price is not None else Decimal(0)
-        total = self.onward_out.price
-        if self.onward_ret is not None:
-            total += self.onward_ret.price
-        return total
+        """Sum of the real onward offers, or the estimate when there are none."""
+        if self.onward_out is not None:
+            total = self.onward_out.price
+            if self.onward_ret is not None:
+                total += self.onward_ret.price
+            return total
+        return self.est_onward_price if self.est_onward_price is not None else Decimal(0)
 
     @property
     def dom_discounted(self) -> Decimal:

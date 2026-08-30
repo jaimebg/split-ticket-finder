@@ -140,6 +140,74 @@ def test_itinerary_round_trip_missing_onward_ret_is_unconfirmed():
     assert it.confirmed is False
 
 
+def test_itinerary_missing_dom_ret_still_prices_the_real_offers():
+    """confirmed=False must not zero out legs that are actually priced.
+
+    Before this fix, dom_price/onward_price branched on `confirmed`, so a
+    round trip missing only dom_ret fell into the estimate branch, found no
+    est_dom_price set, and reported 0 -- a wrong number, not just a wrong
+    flag. Every real offer must still count; confirmed=False is what tells
+    the caller the itinerary is incomplete.
+    """
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=None,
+        onward_out=_offer("500"), onward_ret=_offer("480"),
+    )
+    assert it.confirmed is False
+    assert it.dom_price == Decimal("100")
+    assert it.onward_price == Decimal("980")
+    assert it.total == Decimal("1005.00")
+
+
+def test_itinerary_missing_onward_ret_still_prices_the_real_offers():
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=_offer("120"),
+        onward_out=_offer("500"), onward_ret=None,
+    )
+    assert it.confirmed is False
+    assert it.dom_price == Decimal("220")
+    assert it.onward_price == Decimal("500")
+    assert it.total == Decimal("555.00")
+
+
+def test_itinerary_confirmed_round_trip_totals_are_unaffected_by_the_price_fix():
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=_offer("120"),
+        onward_out=_offer("500"), onward_ret=_offer("480"),
+    )
+    assert it.confirmed is True
+    assert it.dom_price == Decimal("220")
+    assert it.onward_price == Decimal("980")
+    assert it.total == Decimal("1035.00")
+
+
+def test_itinerary_from_candidate_estimate_still_uses_est_prices_after_the_fix():
+    """The no-offers-at-all case is the one est_dom_price/est_onward_price exist for."""
+    c = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",
+                  dom_price=Decimal("148"), onward_price=Decimal("575"),
+                  discount=Decimal("0.75"))
+    it = Itinerary.from_candidate(c, hub_name="Madrid", dest_name="Tokyo")
+    assert it.confirmed is False
+    assert it.dom_price == Decimal("148")
+    assert it.onward_price == Decimal("575")
+
+
+def test_itinerary_est_dom_price_of_zero_is_not_coalesced_away():
+    """A legitimately-zero estimate must read back as zero, not as unset."""
+    it = Itinerary(
+        date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        est_dom_price=Decimal("0"),
+    )
+    assert it.dom_price == Decimal("0")
+
+
 def test_itinerary_from_candidate_is_unconfirmed():
     """An estimate carries no offers and must never be presented as bookable."""
     c = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",
