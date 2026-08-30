@@ -265,6 +265,37 @@ def test_status_is_estimate_for_a_bare_itinerary_with_no_offers_or_estimates():
     assert it.status == STATUS_ESTIMATE
 
 
+def test_itinerary_return_legs_only_round_trip_still_prices_the_real_offers():
+    """dom_out/onward_out absent must not drop dom_ret/onward_ret to the
+    estimate fallback -- every real offer counts regardless of which slot
+    it occupies, not just the outbound one."""
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=None, dom_ret=_offer("120"),
+        onward_out=None, onward_ret=_offer("480"),
+    )
+    assert it.status == STATUS_PARTIAL
+    assert it.dom_price == Decimal("120")
+    assert it.onward_price == Decimal("480")
+    assert it.total == Decimal("510.00")
+
+
+def test_itinerary_outbound_only_round_trip_still_prices_the_real_offers():
+    """The mirror case the pre-rewrite code already got right, pinned so the
+    offer-set rewrite can't regress it."""
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=None,
+        onward_out=_offer("500"), onward_ret=None,
+    )
+    assert it.status == STATUS_PARTIAL
+    assert it.dom_price == Decimal("100")
+    assert it.onward_price == Decimal("500")
+    assert it.total == Decimal("525.00")
+
+
 def test_itinerary_from_candidate_is_unconfirmed():
     """An estimate carries no offers and must never be presented as bookable."""
     c = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",

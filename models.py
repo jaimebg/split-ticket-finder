@@ -191,38 +191,32 @@ class Itinerary:
 
     @property
     def dom_price(self) -> Decimal:
-        """Sum of the real domestic offers, or the estimate when there are none.
+        """Sum of whatever real domestic offers exist, or the estimate.
 
         Keyed on offer presence, not on ``confirmed`` -- a round trip missing
-        only its return leg is still unconfirmed, but the outbound leg it
-        does have is a real price and must count, not fall through to an
-        unset estimate and read as free.
+        one domestic leg is still unconfirmed, but the leg it does have is a
+        real price and must count. Sums whichever of dom_out/dom_ret are
+        present, regardless of which slot holds the offer, so outbound-only,
+        return-only and both-present all fall out of the same rule.
 
-        Invariant this relies on: a side with no offer always has its
-        estimate set too (``from_candidate`` sets both together). Nothing
-        today constructs a side with neither -- if a future caller ever
-        does, this falls through to ``Decimal(0)``, which reads as free
-        rather than as missing. Guard that at construction time, not here.
+        Falls back to ``est_dom_price`` (or ``Decimal(0)`` when that is also
+        ``None``) only when *neither* slot holds an offer -- a genuinely
+        empty side, not one with data being silently dropped.
         """
-        if self.dom_out is not None:
-            total = self.dom_out.price
-            if self.dom_ret is not None:
-                total += self.dom_ret.price
-            return total
+        offers = [o for o in (self.dom_out, self.dom_ret) if o is not None]
+        if offers:
+            return sum((o.price for o in offers), Decimal(0))
         return self.est_dom_price if self.est_dom_price is not None else Decimal(0)
 
     @property
     def onward_price(self) -> Decimal:
-        """Sum of the real onward offers, or the estimate when there are none.
+        """Sum of whatever real onward offers exist, or the estimate.
 
-        Same fallback-to-zero caveat as ``dom_price`` above: relies on a
-        missing offer always coming with its estimate set.
+        Same rule as ``dom_price`` above, over onward_out/onward_ret.
         """
-        if self.onward_out is not None:
-            total = self.onward_out.price
-            if self.onward_ret is not None:
-                total += self.onward_ret.price
-            return total
+        offers = [o for o in (self.onward_out, self.onward_ret) if o is not None]
+        if offers:
+            return sum((o.price for o in offers), Decimal(0))
         return self.est_onward_price if self.est_onward_price is not None else Decimal(0)
 
     @property
