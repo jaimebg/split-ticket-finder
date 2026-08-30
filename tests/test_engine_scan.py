@@ -167,3 +167,93 @@ async def test_a_bare_provider_error_propagates_and_is_not_counted():
             provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
             window=WINDOW, trip_days=0, adults=1, currency="EUR",
         )
+
+
+from engine.scan import rank_candidates
+
+
+def _grid(out_dom=None, out_onward=None, ret_dom=None, ret_onward=None):
+    def rated(table):
+        return {d: RatedPrice(price=Decimal(p), rating="AVERAGE") for d, p in table.items()}
+    return CalendarGrid(
+        out_dom={k: rated(v) for k, v in (out_dom or {}).items()},
+        ret_dom={k: rated(v) for k, v in (ret_dom or {}).items()},
+        out_onward={k: rated(v) for k, v in (out_onward or {}).items()},
+        ret_onward={k: rated(v) for k, v in (ret_onward or {}).items()},
+    )
+
+
+def test_ranking_applies_the_discount_only_to_the_domestic_leg():
+    grid = _grid(out_dom={"MAD": {"2026-10-01": "148"}},
+                 out_onward={("MAD", "NRT"): {"2026-10-01": "575"}})
+    ranked = rank_candidates(grid, window=WINDOW, trip_days=0,
+                             discount_airports={"MAD"}, discount=Decimal("0.75"))
+    assert len(ranked) == 1
+    assert ranked[0].total == Decimal("612.00")     # 148*0.25 + 575
+
+
+def test_ranking_skips_the_discount_for_a_hub_outside_the_scheme():
+    grid = _grid(out_dom={"LIS": {"2026-10-01": "148"}},
+                 out_onward={("LIS", "NRT"): {"2026-10-01": "575"}})
+    ranked = rank_candidates(grid, window=WINDOW, trip_days=0,
+                             discount_airports={"MAD"}, discount=Decimal("0.75"))
+    assert ranked[0].total == Decimal("723")        # 148 + 575, no discount
+
+
+def test_ranking_covers_every_day_in_the_window():
+    grid = _grid(out_dom={"MAD": {"2026-10-01": "29", "2026-10-02": "48", "2026-10-03": "45"}},
+                 out_onward={("MAD", "NRT"): {"2026-10-01": "575", "2026-10-02": "500",
+                                              "2026-10-03": "600"}})
+    ranked = rank_candidates(grid, window=WINDOW, trip_days=0,
+                             discount_airports={"MAD"}, discount=Decimal("0.75"))
+    assert {c.date for c in ranked} == {"2026-10-01", "2026-10-02", "2026-10-03"}
+
+
+def test_ranking_is_sorted_cheapest_first():
+    grid = _grid(out_dom={"MAD": {"2026-10-01": "29", "2026-10-02": "200"}},
+                 out_onward={("MAD", "NRT"): {"2026-10-01": "575", "2026-10-02": "400"}})
+    ranked = rank_candidates(grid, window=WINDOW, trip_days=0,
+                             discount_airports={"MAD"}, discount=Decimal("0.75"))
+    assert [c.total for c in ranked] == sorted(c.total for c in ranked)
+
+
+def test_a_date_missing_from_either_leg_produces_no_candidate():
+    """Half an itinerary is not an itinerary."""
+    grid = _grid(out_dom={"MAD": {"2026-10-01": "29", "2026-10-02": "48"}},
+                 out_onward={("MAD", "NRT"): {"2026-10-01": "575"}})
+    ranked = rank_candidates(grid, window=WINDOW, trip_days=0,
+                             discount_airports={"MAD"}, discount=Decimal("0.75"))
+    assert [c.date for c in ranked] == ["2026-10-01"]
+
+
+def test_round_trip_requires_all_four_legs_and_sums_them():
+    grid = _grid(
+        out_dom={"MAD": {"2026-10-01": "100"}},
+        out_onward={("MAD", "NRT"): {"2026-10-01": "500"}},
+        ret_dom={"MAD": {"2026-10-15": "120"}},
+        ret_onward={("MAD", "NRT"): {"2026-10-15": "480"}},
+    )
+    ranked = rank_candidates(grid, window=WINDOW, trip_days=14,
+                             discount_airports={"MAD"}, discount=Decimal("0.75"))
+    assert len(ranked) == 1
+    c = ranked[0]
+    assert c.return_date == "2026-10-15"
+    assert c.dom_price == Decimal("220")
+    assert c.onward_price == Decimal("980")
+    assert c.total == Decimal("1035.00")
+
+
+def test_round_trip_drops_a_date_whose_return_leg_is_missing():
+    grid = _grid(
+        out_dom={"MAD": {"2026-10-01": "100"}},
+        out_onward={("MAD", "NRT"): {"2026-10-01": "500"}},
+        ret_dom={"MAD": {"2026-10-15": "120"}},
+        ret_onward={},                                  # no return onward leg
+    )
+    assert rank_candidates(grid, window=WINDOW, trip_days=14,
+                           discount_airports={"MAD"}, discount=Decimal("0.75")) == []
+
+
+def test_empty_grid_ranks_to_nothing():
+    assert rank_candidates(_grid(), window=WINDOW, trip_days=0,
+                           discount_airports={"MAD"}, discount=Decimal("0.75")) == []
