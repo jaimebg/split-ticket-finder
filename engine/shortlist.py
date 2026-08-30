@@ -88,6 +88,22 @@ def legs_for(
     domestic ``origin -> hub`` leg and the onward ``hub -> dest`` leg, both
     on ``date``. For a round trip, two mirrored legs are added on top of
     those: ``hub -> origin`` and ``dest -> hub``, both on ``return_date``.
+
+    ``trip_days`` and ``return_date`` are two sources of truth for the same
+    fact, and phase 0b keeps them consistent -- but this is a public
+    function Task 7 calls, so that consistency is checked rather than
+    assumed. ``trip_days`` is the authority on trip *shape*; a candidate's
+    own ``return_date`` is the authority on *which* date, once shape says a
+    return date is expected. If ``trip_days > 0`` and a candidate's
+    ``return_date`` is empty, that candidate is inconsistent with the shape
+    it was asked to be built for, and there is no date to build a correct
+    mirrored leg from -- silently building one from ``""`` would produce a
+    malformed provider query rather than a shrunk shortlist, which is the
+    broken-looks-like-empty failure mode this project avoids elsewhere.
+    This raises ``ValueError`` instead. The converse (``trip_days == 0``
+    with a populated ``return_date``) is not an error: ``trip_days`` says
+    the trip is one-way, so the unused ``return_date`` is simply ignored
+    and only one-way legs are emitted.
     """
     legs: dict[LegKey, None] = {}
 
@@ -95,6 +111,11 @@ def legs_for(
         legs[(origin, cand.hub, cand.date)] = None
         legs[(cand.hub, cand.dest, cand.date)] = None
         if trip_days > 0:
+            if not cand.return_date:
+                raise ValueError(
+                    f"candidate {cand.date} {cand.hub}->{cand.dest} has trip_days="
+                    f"{trip_days} but no return_date"
+                )
             legs[(cand.hub, origin, cand.return_date)] = None
             legs[(cand.dest, cand.hub, cand.return_date)] = None
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from engine.shortlist import diversify, legs_for
 from models import Candidate
 
@@ -90,3 +92,32 @@ def test_legs_for_is_deterministic():
 
 def test_legs_for_no_candidates():
     assert legs_for([], origin="LPA", trip_days=0) == []
+
+
+def test_legs_for_raises_when_trip_days_positive_but_return_date_empty():
+    """trip_days and return_date are two sources of truth for the same fact;
+
+    when they disagree, building a leg from an empty date would silently
+    produce a malformed provider query rather than an error.
+    """
+    cands = [_c("2026-10-01", "MAD", "NRT", 600)]  # return_date="" (default)
+    with pytest.raises(ValueError, match=r"2026-10-01.*MAD.*NRT"):
+        legs_for(cands, origin="LPA", trip_days=14)
+
+
+def test_legs_for_consistent_round_trip_still_works():
+    """The consistent case (trip_days > 0 and return_date populated) is untouched."""
+    cands = [_c("2026-10-01", "MAD", "NRT", 600, return_date="2026-10-15")]
+    legs = legs_for(cands, origin="LPA", trip_days=14)
+    assert set(legs) == {
+        ("LPA", "MAD", "2026-10-01"), ("MAD", "NRT", "2026-10-01"),
+        ("MAD", "LPA", "2026-10-15"), ("NRT", "MAD", "2026-10-15"),
+    }
+
+
+def test_legs_for_one_way_ignores_a_populated_return_date():
+    """trip_days is the authority on trip shape: trip_days=0 means one-way legs
+    only, even if the candidate happens to carry a return_date."""
+    cands = [_c("2026-10-01", "MAD", "NRT", 600, return_date="2026-10-15")]
+    legs = legs_for(cands, origin="LPA", trip_days=0)
+    assert set(legs) == {("LPA", "MAD", "2026-10-01"), ("MAD", "NRT", "2026-10-01")}
