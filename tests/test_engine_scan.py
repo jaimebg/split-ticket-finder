@@ -7,15 +7,17 @@ import pytest
 
 from engine.scan import CalendarGrid, scan_calendars
 from models import CancelToken, SearchCancelled, SearchWindow
-from providers.base import RatedPrice
+from providers.base import ProviderError, ProviderFetchError, ProviderParseError, RatedPrice
 
 
 class FakeCalendarProvider:
     name = "fake"
 
-    def __init__(self, prices=None):
+    def __init__(self, prices=None, errors=None):
         # prices: {(origin, dest): {date: "29"}}
+        # errors: {(origin, dest): Exception} -- raised instead of returning a table
         self.prices = prices or {}
+        self.errors = errors or {}
         self.calls: list[tuple[str, str, str, str]] = []
 
     async def search_leg(self, query):
@@ -23,7 +25,10 @@ class FakeCalendarProvider:
 
     async def price_calendar(self, query):
         self.calls.append((query.origin, query.dest, query.start, query.end))
-        table = self.prices.get((query.origin, query.dest), {})
+        key = (query.origin, query.dest)
+        if key in self.errors:
+            raise self.errors[key]
+        table = self.prices.get(key, {})
         return {d: RatedPrice(price=Decimal(p), rating="AVERAGE") for d, p in table.items()}
 
     async def aclose(self):
@@ -105,3 +110,60 @@ async def test_scan_is_cancellable():
             window=WINDOW, trip_days=0, adults=1, currency="EUR", cancel=token,
         )
     assert provider.calls == []
+
+
+async def test_a_parse_error_drops_only_that_leg_and_is_counted():
+    """A broken calendar is dropped and counted; the rest of the grid is intact."""
+    provider = FakeCalendarProvider(
+        prices={("MAD", "NRT"): {"2026-10-01": "575"}},
+        errors={("LPA", "MAD"): ProviderParseError("schema moved")},
+    )
+    grid = await scan_calendars(
+        provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
+        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+    )
+    assert grid.parse_errors == 1
+    assert grid.fetch_errors == 0
+    assert "MAD" not in grid.out_dom
+    # the leg that succeeded is unaffected by the one that failed
+    assert grid.out_onward[("MAD", "NRT")]["2026-10-01"].price == Decimal("575")
+
+
+async def test_a_fetch_error_drops_only_that_leg_and_is_counted_separately():
+    provider = FakeCalendarProvider(
+        prices={("MAD", "NRT"): {"2026-10-01": "575"}},
+        errors={("LPA", "MAD"): ProviderFetchError("timeout")},
+    )
+    grid = await scan_calendars(
+        provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
+        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+    )
+    assert grid.fetch_errors == 1
+    assert grid.parse_errors == 0
+    assert "MAD" not in grid.out_dom
+    assert grid.out_onward[("MAD", "NRT")]["2026-10-01"].price == Decimal("575")
+
+
+async def test_a_clean_scan_leaves_both_error_counters_at_zero():
+    provider = FakeCalendarProvider({("LPA", "MAD"): {"2026-10-01": "29"}})
+    grid = await scan_calendars(
+        provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
+        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+    )
+    assert grid.parse_errors == 0
+    assert grid.fetch_errors == 0
+
+
+async def test_a_bare_provider_error_propagates_and_is_not_counted():
+    """Mirrors LegFetcher's three-way contract: a bare ProviderError means the
+    provider cannot answer this *kind* of query at all, so every leg pair would
+    fail identically -- it must abort the scan rather than being counted like a
+    per-leg parse/fetch failure."""
+    provider = FakeCalendarProvider(
+        errors={("LPA", "MAD"): ProviderError("cannot express this query")},
+    )
+    with pytest.raises(ProviderError):
+        await scan_calendars(
+            provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
+            window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        )

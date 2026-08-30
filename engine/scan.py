@@ -26,12 +26,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CalendarGrid:
-    """Every calendar a search needs, keyed for phase 0b's arithmetic."""
+    """Every calendar a search needs, keyed for phase 0b's arithmetic.
+
+    parse_errors/fetch_errors count leg pairs whose calendar could not be
+    read -- they travel with the grid rather than a separate return value,
+    because the grid is what flows on to phase 0b and a search summary
+    needs to say when its ranking was built from an incomplete grid.
+    """
 
     out_dom: dict[str, dict[str, RatedPrice]]
     ret_dom: dict[str, dict[str, RatedPrice]]
     out_onward: dict[tuple[str, str], dict[str, RatedPrice]]
     ret_onward: dict[tuple[str, str], dict[str, RatedPrice]]
+    parse_errors: int = 0
+    fetch_errors: int = 0
 
 
 # One calendar request: which slot of the grid it belongs under, and the
@@ -106,7 +114,7 @@ async def scan_calendars(
     discipline as LegFetcher, and reports progress through the same
     swallow-exceptions helper. A leg pair whose calendar cannot be fetched or
     parsed is counted and dropped -- absent from the grid -- rather than
-    aborting the scan.
+    aborting the scan; the other leg pairs are unaffected.
     """
     if cancel is not None:
         cancel.raise_if_cancelled()
@@ -126,30 +134,52 @@ async def scan_calendars(
         "out_onward": out_onward,
         "ret_onward": ret_onward,
     }
+    parse_errors = 0
+    fetch_errors = 0
 
     if not jobs:
-        return CalendarGrid(out_dom=out_dom, ret_dom=ret_dom,
-                             out_onward=out_onward, ret_onward=ret_onward)
+        return CalendarGrid(out_dom=out_dom, ret_dom=ret_dom, out_onward=out_onward,
+                             ret_onward=ret_onward, parse_errors=parse_errors,
+                             fetch_errors=fetch_errors)
 
     total = len(jobs)
     phase = "Phase 0"
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _one(query: CalendarQuery) -> dict[str, RatedPrice]:
+        nonlocal parse_errors, fetch_errors
         async with semaphore:
             if cancel is not None:
                 cancel.raise_if_cancelled()
+            # Three kinds of failure reach this point, handled differently on
+            # purpose -- mirrors LegFetcher._one:
+            #
+            # - ProviderParseError / ProviderFetchError: this leg pair's
+            #   calendar failed -- count it, drop it, keep going. Other leg
+            #   pairs may well succeed.
+            # - A bare ProviderError: the provider cannot answer this *kind*
+            #   of query at all. Every leg pair would fail the same way, so
+            #   this is deliberately left uncaught here: it propagates out of
+            #   scan_calendars and aborts the scan. Counting it like a
+            #   per-leg failure would report a misconfigured search as "no
+            #   flights found", which is exactly the broken-looks-like-empty
+            #   failure this codebase exists to prevent. Do not add
+            #   "except ProviderError" as a tidy-up.
+            # - SearchCancelled: a user decision; propagates.
             try:
                 return await provider.price_calendar(query)
             except ProviderParseError as exc:
+                parse_errors += 1
                 logger.warning("Calendar parse failed for %s->%s: %s",
                                query.origin, query.dest, exc)
                 return {}
             except ProviderFetchError as exc:
+                fetch_errors += 1
                 logger.warning("Calendar fetch failed for %s->%s: %s",
                                query.origin, query.dest, exc)
                 return {}
             finally:
+                # Hold the slot for the delay, so the rate limit is per-worker.
                 if delay:
                     await asyncio.sleep(delay)
 
@@ -170,5 +200,6 @@ async def scan_calendars(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
 
-    return CalendarGrid(out_dom=out_dom, ret_dom=ret_dom,
-                         out_onward=out_onward, ret_onward=ret_onward)
+    return CalendarGrid(out_dom=out_dom, ret_dom=ret_dom, out_onward=out_onward,
+                         ret_onward=ret_onward, parse_errors=parse_errors,
+                         fetch_errors=fetch_errors)
