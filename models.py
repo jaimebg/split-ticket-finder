@@ -134,6 +134,15 @@ class Candidate:
         return self.dom_discounted + self.onward_price
 
 
+# Itinerary.status: confirmed alone cannot tell a display layer whether an
+# itinerary has no real data at all or merely incomplete real data -- both
+# report confirmed=False. These three values disambiguate that for callers,
+# who should compare against the name rather than a bare string literal.
+STATUS_ESTIMATE = "estimate"    # no real offer anywhere; every figure is a calendar guess
+STATUS_CONFIRMED = "confirmed"  # every leg the trip shape needs is a real offer
+STATUS_PARTIAL = "partial"      # some real offers, but not a complete itinerary
+
+
 @dataclass(frozen=True)
 class Itinerary:
     """A split-ticket itinerary: a discounted leg plus an onward leg.
@@ -188,6 +197,12 @@ class Itinerary:
         only its return leg is still unconfirmed, but the outbound leg it
         does have is a real price and must count, not fall through to an
         unset estimate and read as free.
+
+        Invariant this relies on: a side with no offer always has its
+        estimate set too (``from_candidate`` sets both together). Nothing
+        today constructs a side with neither -- if a future caller ever
+        does, this falls through to ``Decimal(0)``, which reads as free
+        rather than as missing. Guard that at construction time, not here.
         """
         if self.dom_out is not None:
             total = self.dom_out.price
@@ -198,7 +213,11 @@ class Itinerary:
 
     @property
     def onward_price(self) -> Decimal:
-        """Sum of the real onward offers, or the estimate when there are none."""
+        """Sum of the real onward offers, or the estimate when there are none.
+
+        Same fallback-to-zero caveat as ``dom_price`` above: relies on a
+        missing offer always coming with its estimate set.
+        """
         if self.onward_out is not None:
             total = self.onward_out.price
             if self.onward_ret is not None:
@@ -218,6 +237,29 @@ class Itinerary:
     def legs(self) -> tuple[Offer, ...]:
         return tuple(o for o in (self.dom_out, self.dom_ret,
                                  self.onward_out, self.onward_ret) if o is not None)
+
+    @property
+    def status(self) -> str:
+        """One of STATUS_ESTIMATE, STATUS_CONFIRMED, STATUS_PARTIAL.
+
+        ``confirmed`` alone cannot distinguish "no real data" from
+        "incomplete real data" -- both report False. A display layer needs
+        that distinction: a total built from zero real offers is a calendar
+        guess, but a total missing only one leg out of four is mostly real
+        money, and stamping both as "estimated" alike either overstates the
+        uncertainty of the second or, if a caller instead trusts any
+        non-zero total, overstates the confidence of the first.
+        """
+        if not self.legs:
+            return STATUS_ESTIMATE
+        if self.confirmed:
+            return STATUS_CONFIRMED
+        return STATUS_PARTIAL
+
+    @property
+    def is_estimate(self) -> bool:
+        """Convenience for the single most common check a display layer makes."""
+        return self.status == STATUS_ESTIMATE
 
     @property
     def requires_bag_recheck(self) -> bool | None:

@@ -6,6 +6,9 @@ from decimal import Decimal
 import pytest
 
 from models import (
+    STATUS_CONFIRMED,
+    STATUS_ESTIMATE,
+    STATUS_PARTIAL,
     CancelToken,
     Candidate,
     Itinerary,
@@ -206,6 +209,60 @@ def test_itinerary_est_dom_price_of_zero_is_not_coalesced_away():
         est_dom_price=Decimal("0"),
     )
     assert it.dom_price == Decimal("0")
+
+
+# ── Itinerary.status ─────────────────────────────────────────────────────────
+
+
+def test_status_is_estimate_for_a_from_candidate_itinerary():
+    """No real offer anywhere: every figure is a calendar guess."""
+    c = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",
+                  dom_price=Decimal("148"), onward_price=Decimal("575"),
+                  discount=Decimal("0.75"))
+    it = Itinerary.from_candidate(c, hub_name="Madrid", dest_name="Tokyo")
+    assert it.status == STATUS_ESTIMATE
+    assert it.is_estimate is True
+
+
+def test_status_is_confirmed_for_a_one_way_with_both_legs():
+    it = Itinerary(
+        date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("148"), onward_out=_offer("575"),
+    )
+    assert it.status == STATUS_CONFIRMED
+    assert it.is_estimate is False
+
+
+def test_status_is_confirmed_for_a_round_trip_with_all_four_legs():
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=_offer("120"),
+        onward_out=_offer("500"), onward_ret=_offer("480"),
+    )
+    assert it.status == STATUS_CONFIRMED
+
+
+def test_status_is_partial_when_three_of_four_legs_are_real_offers():
+    """Some real offers but not a complete itinerary -- and the total must
+    still reflect the real offers it does have, not fall back to zero."""
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=None,
+        onward_out=_offer("500"), onward_ret=_offer("480"),
+    )
+    assert it.status == STATUS_PARTIAL
+    assert it.total == Decimal("1005.00")
+
+
+def test_status_is_estimate_for_a_bare_itinerary_with_no_offers_or_estimates():
+    it = Itinerary(
+        date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+    )
+    assert it.status == STATUS_ESTIMATE
 
 
 def test_itinerary_from_candidate_is_unconfirmed():
