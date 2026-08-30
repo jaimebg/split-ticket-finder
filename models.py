@@ -166,12 +166,24 @@ class Itinerary:
 
     @property
     def confirmed(self) -> bool:
-        return self.dom_out is not None and self.onward_out is not None
+        """Every leg the trip shape requires has a real offer behind it.
+
+        A round trip (return_date set) needs all four legs; a one-way needs
+        only the two outbound legs. A round trip missing dom_ret or
+        onward_ret is not confirmed, even though both outbound offers exist
+        -- reporting True there would pair a real-looking total with a
+        return flight the traveller still has to buy.
+        """
+        if self.dom_out is None or self.onward_out is None:
+            return False
+        if self.return_date:
+            return self.dom_ret is not None and self.onward_ret is not None
+        return True
 
     @property
     def dom_price(self) -> Decimal:
         if not self.confirmed:
-            return self.est_dom_price or Decimal(0)
+            return self.est_dom_price if self.est_dom_price is not None else Decimal(0)
         total = self.dom_out.price
         if self.dom_ret is not None:
             total += self.dom_ret.price
@@ -180,7 +192,7 @@ class Itinerary:
     @property
     def onward_price(self) -> Decimal:
         if not self.confirmed:
-            return self.est_onward_price or Decimal(0)
+            return self.est_onward_price if self.est_onward_price is not None else Decimal(0)
         total = self.onward_out.price
         if self.onward_ret is not None:
             total += self.onward_ret.price

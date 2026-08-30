@@ -85,6 +85,26 @@ def test_itinerary_totals_are_decimal_and_discount_applies_to_domestic_only():
     assert it.confirmed is True
 
 
+def test_itinerary_one_way_with_both_legs_is_confirmed():
+    """The stricter round-trip rule must not regress the one-way case."""
+    it = Itinerary(
+        date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("148"), onward_out=_offer("575"),
+    )
+    assert it.confirmed is True
+
+
+def test_itinerary_round_trip_with_all_four_legs_is_confirmed():
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=_offer("120"),
+        onward_out=_offer("500"), onward_ret=_offer("480"),
+    )
+    assert it.confirmed is True
+
+
 def test_itinerary_round_trip_sums_all_four_legs():
     it = Itinerary(
         date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
@@ -96,6 +116,28 @@ def test_itinerary_round_trip_sums_all_four_legs():
     assert it.dom_discounted == Decimal("55.00")
     assert it.onward_price == Decimal("980")
     assert it.total == Decimal("1035.00")
+    assert it.confirmed is True
+
+
+def test_itinerary_round_trip_missing_dom_ret_is_unconfirmed():
+    """Both outbound legs present is not enough for a round trip."""
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=None,
+        onward_out=_offer("500"), onward_ret=_offer("480"),
+    )
+    assert it.confirmed is False
+
+
+def test_itinerary_round_trip_missing_onward_ret_is_unconfirmed():
+    it = Itinerary(
+        date="2026-10-01", return_date="2026-10-15", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("100"), dom_ret=_offer("120"),
+        onward_out=_offer("500"), onward_ret=None,
+    )
+    assert it.confirmed is False
 
 
 def test_itinerary_from_candidate_is_unconfirmed():
@@ -130,6 +172,15 @@ def test_itinerary_bag_recheck_is_unknown_when_any_leg_cannot_say():
     assert it.requires_bag_recheck is None
 
 
+def test_itinerary_bag_recheck_is_unknown_with_no_legs():
+    """No legs to inspect is a genuine cannot-say, not a clean 'no'."""
+    c = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",
+                  dom_price=Decimal("148"), onward_price=Decimal("575"),
+                  discount=Decimal("0.75"))
+    it = Itinerary.from_candidate(c, hub_name="Madrid", dest_name="Tokyo")
+    assert it.requires_bag_recheck is None
+
+
 def test_itinerary_savings_against_a_through_fare():
     it = Itinerary(
         date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
@@ -149,6 +200,16 @@ def test_itinerary_savings_is_none_without_a_through_fare():
         dom_out=_offer("148"), onward_out=_offer("575"),
     )
     assert it.savings is None
+    assert it.savings_pct is None
+
+
+def test_itinerary_savings_pct_is_none_when_through_fare_is_not_positive():
+    it = Itinerary(
+        date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
+        dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),
+        dom_out=_offer("148"), onward_out=_offer("575"),
+        through_fare=Decimal("0"),
+    )
     assert it.savings_pct is None
 
 
