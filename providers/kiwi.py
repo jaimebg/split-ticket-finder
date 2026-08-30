@@ -278,6 +278,7 @@ class KiwiProvider:
 
         segments: list[Segment] = []
         layovers: list[int] = []
+        bag_recheck = False
         for entry in sector_segments:
             seg = _require(entry, "segment")
             carrier = _require(seg, "carrier")
@@ -295,6 +296,8 @@ class KiwiProvider:
             layover = entry.get("layover")
             if layover and layover.get("duration") is not None:
                 layovers.append(_minutes(layover["duration"]))
+                if layover.get("isBaggageRecheck"):
+                    bag_recheck = True
 
         # A sectorSegment's layover sits between it and the segment before it,
         # so the first entry structurally has none and every later one must.
@@ -335,6 +338,7 @@ class KiwiProvider:
             checked_bag_price=checked_bag_price,
             min_layover=min(layovers) if layovers else None,
             pnr_count=_require(raw, "pnrCount"),
+            requires_bag_recheck=bag_recheck,
         )
 
     async def price_calendar(self, query: CalendarQuery) -> dict[str, RatedPrice]:

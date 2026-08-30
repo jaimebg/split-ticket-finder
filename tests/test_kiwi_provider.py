@@ -385,6 +385,39 @@ async def test_search_leg_raises_when_every_layover_is_malformed(kiwi_fixture):
         ))
 
 
+# ── Baggage re-check (bag-recheck task) ──────────────────────────────────────
+#
+# ONEWAY_QUERY already selects Layover.isBaggageRecheck; it answers whether a
+# self-transfer forces the traveller to re-claim and re-check bags at the hub.
+
+
+async def test_search_leg_reports_baggage_recheck_on_self_transfer(kiwi_fixture):
+    """isBaggageRecheck is already in the payload; it must reach the Offer."""
+    payload = kiwi_fixture("oneway_mad_nrt_multisegment")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="MAD", dest="NRT", date="2026-10-06")
+    ))[0]
+    # The recorded itinerary has isBaggageRecheck True on two of its layovers.
+    assert first.requires_bag_recheck is True
+
+
+async def test_search_leg_reports_no_recheck_when_no_layover_needs_one(kiwi_fixture):
+    payload = kiwi_fixture("oneway_lpa_mad")
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    first = (await _provider(handler).search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06")
+    ))[0]
+    # A direct flight has no connection, so there is nothing to re-check.
+    assert first.requires_bag_recheck is False
+
+
 # ── Broken vs. empty (fix round 1, finding 2) ────────────────────────────────
 #
 # "Empty list means no flights, exception means broken" is the whole point of

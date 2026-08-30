@@ -391,7 +391,9 @@ def _to_offer(flight, query: LegQuery) -> Offer:
         segments=segments,
         provider="google",
         # Everything below is structurally absent from Google's payload.
-        # None means "unknown", and the formatter must say so.
+        # None means "unknown", and the formatter must say so. That includes
+        # requires_bag_recheck: Google's payload carries no layover data at
+        # all, so it cannot say whether a connection forces a bag re-check.
     )
 
 
