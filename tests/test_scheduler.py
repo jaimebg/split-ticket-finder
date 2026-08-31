@@ -17,7 +17,7 @@ import db as db_module
 import scheduler as scheduler_module
 from models import Itinerary
 from providers.base import Offer
-from scheduler import _sample_dates, check_favorites
+from scheduler import check_favorites
 
 
 class FakeBot:
@@ -69,28 +69,6 @@ def fake_engine(monkeypatch):
 
     monkeypatch.setattr(scheduler_module, "run_search", fake_run_search)
     return {"calls": calls, "state": state}
-
-
-# ── Date sampling ───────────────────────────────────────────────────────────
-
-
-def test_sample_dates_returns_all_when_under_the_cap():
-    dates = ["2026-09-01", "2026-09-02"]
-    assert _sample_dates(dates, max_n=5) == dates
-
-
-def test_sample_dates_spreads_across_the_range():
-    dates = [f"2026-09-{d:02d}" for d in range(1, 21)]
-    sampled = _sample_dates(dates, max_n=5)
-
-    assert len(sampled) == 5
-    assert sampled[0] == "2026-09-01"
-    assert all(d in dates for d in sampled)
-    assert sampled == sorted(sampled)
-
-
-def test_sample_dates_handles_empty_input():
-    assert _sample_dates([], max_n=5) == []
 
 
 # ── Task 12 requirement: the scheduler must not recompute a discount ────────
@@ -162,6 +140,30 @@ async def test_favorite_provider_is_resolved_and_forwarded(temp_db, fake_engine,
     await check_favorites(FakeBot(), owner_chat_id=1)
 
     assert fake_engine["calls"][0]["provider"] is fake_provider
+
+
+async def test_check_favorites_uses_the_full_tracked_range_as_the_window(
+    temp_db, fake_engine,
+):
+    """Regression guard for review finding I5: the old
+    ``_sample_dates(all_dates, max_n=5)`` picked five evenly-spaced indices
+    that never included the last one, so the window built from that sample
+    silently excluded the tail of a long tracked range -- contradicting
+    handlers/favorites.py's own "Track every date the search covered". A
+    favourite tracked over 20 dates must search a window covering all of
+    them, end included."""
+    dates = [f"2026-09-{d:02d}" for d in range(1, 21)]  # 20 dates
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=dates, trip_days=0,
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    window = fake_engine["calls"][0]["window"]
+    assert window.start == "2026-09-01"
+    assert window.end == "2026-09-20"  # the last date -- never reached pre-fix
 
 
 async def test_favorite_without_a_stored_provider_falls_back_to_the_primary(

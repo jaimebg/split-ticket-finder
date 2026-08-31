@@ -14,14 +14,6 @@ from providers.registry import get_provider, primary_provider
 logger = logging.getLogger(__name__)
 
 
-def _sample_dates(dates: list[str], max_n: int = 5) -> list[str]:
-    """Return up to *max_n* evenly-spaced dates from the list."""
-    if len(dates) <= max_n:
-        return list(dates)
-    step = len(dates) / max_n
-    return [dates[int(i * step)] for i in range(max_n)]
-
-
 async def check_favorites(bot, owner_chat_id: int) -> None:
     """Iterate all favorites and check current prices against records.
 
@@ -62,8 +54,17 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
             logger.warning("Favorite %d has no check_dates, skipping.", fav_id)
             continue
 
-        sampled = _sample_dates(all_dates, max_n=5)
-        window = SearchWindow(start=min(sampled), end=max(sampled))
+        # The full tracked range, not a sample of it (review finding I5): the
+        # old `_sample_dates(all_dates, max_n=5)` picked five evenly-spaced
+        # indices that never included the last one, so a favourite tracked
+        # over e.g. 2026-09-01..2026-11-30 had its final ~18 days never
+        # re-priced -- a genuine drop there was undetectable, contradicting
+        # handlers/favorites.py's own "Track every date the search covered".
+        # That sampling saved requests only under the old grid engine, where
+        # date coverage cost real queries; a price-calendar provider prices
+        # the whole window for one request regardless of how wide it is, so
+        # there is nothing left to save by sampling.
+        window = SearchWindow(start=min(all_dates), end=max(all_dates))
 
         # The query shape a favourite's price was quoted under has to be
         # replayed exactly, same reasoning as trip_days above — a provider
@@ -109,7 +110,7 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
                     fav_id, result.parse_errors, result.fetch_errors,
                 )
             else:
-                logger.info("Favorite %d: no flights found in sampled dates.", fav_id)
+                logger.info("Favorite %d: no flights found in tracked dates.", fav_id)
             continue
 
         best = min(itineraries, key=lambda itin: itin.total)
