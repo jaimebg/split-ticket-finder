@@ -14,7 +14,16 @@ from telegram.ext import (
     filters,
 )
 
-from config import DEFAULT_HUBS, ORIGIN, PORTUGAL_HUBS, SPAIN_HUBS
+from config import (
+    DEFAULT_HUBS,
+    FALLBACK_MAX_DATES,
+    MAX_WINDOW_DAYS,
+    ORIGIN,
+    PORTUGAL_HUBS,
+    SHORTLIST_SIZE,
+    SPAIN_HUBS,
+    THROUGH_FARE_DATES,
+)
 from db import save_search
 from engine import run_search
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only, owner_only_callback
@@ -28,6 +37,8 @@ from handlers.utils import (
     split_message,
 )
 from models import SearchWindow, generate_dates
+from providers.base import SupportsCalendar
+from providers.registry import primary_provider
 from search import format_results, itineraries_to_json, scan_to_json
 
 logger = logging.getLogger(__name__)
@@ -45,6 +56,27 @@ DATE_MODE_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("Date range", callback_data="datemode_range"),
     ],
 ])
+
+
+def _oversized_window_message(start: str, end: str) -> str | None:
+    """A user-facing message if *start*..*end* exceeds MAX_WINDOW_DAYS, else None.
+
+    Checked in the date-collection steps themselves (review finding I6), so
+    the conversation can re-prompt with a message naming the limit instead of
+    reaching a full "Ready?" summary only to have ``run_search`` reject the
+    window with a bare ``ValueError`` once the search actually starts. That
+    ``ValueError`` is still caught distinctly in ``run_and_report`` below, as
+    a second line of defence for whatever this early check doesn't cover
+    (e.g. a history rerun of a search saved before this validation existed).
+    """
+    span = SearchWindow(start=start, end=end).days
+    if span > MAX_WINDOW_DAYS:
+        return (
+            f"That's a <b>{span}-day</b> span ({start} to {end}), more than the "
+            f"<b>{MAX_WINDOW_DAYS}-day</b> limit the search engine can cover in "
+            "one request. Send a narrower range."
+        )
+    return None
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
@@ -241,6 +273,12 @@ async def fixed_dates_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(str(exc), parse_mode="HTML")
         return FIXED_DATES
 
+    # dates is sorted (parse_date_list), so [0]..[-1] is the widest span.
+    oversized = _oversized_window_message(dates[0], dates[-1])
+    if oversized:
+        await update.message.reply_text(oversized, parse_mode="HTML")
+        return FIXED_DATES
+
     context.user_data["dates"] = dates
     return await _ask_hubs(update.message, context)
 
@@ -280,6 +318,11 @@ async def range_end_input(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Send an end date on or after the start date.",
             parse_mode="HTML",
         )
+        return RANGE_END
+
+    oversized = _oversized_window_message(start, end)
+    if oversized:
+        await update.message.reply_text(oversized, parse_mode="HTML")
         return RANGE_END
 
     context.user_data["range_end"] = end
@@ -398,6 +441,48 @@ async def custom_hubs_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 # ── CONFIRM state ────────────────────────────────────────────────────────────
 
+def _estimate_queries(*, hubs: int, dests: int, dates: int, round_trip: bool) -> int:
+    """Upper-bound query count shown before a search starts (review finding I4).
+
+    Branches on whether the deployment's primary provider has a price
+    calendar, exactly as ``engine.orchestrator.run_search`` branches its
+    strategy -- the old formula (``hubs * dates * (1 + dests)``) described the
+    grid pipeline this branch replaced, and quoted it even for a two-stage
+    search that no longer issues one query per date at all.
+
+    Two-stage (``isinstance(provider, SupportsCalendar)``): phase 0 prices
+    every day of the window in one request per hub/destination pair
+    (``H*(1+D)``, doubled for a round trip); phase 1 confirms at most
+    ``SHORTLIST_SIZE`` candidates, each needing 2 legs one-way or 4
+    round-trip; phase 2 prices a through-fare baseline for up to
+    ``THROUGH_FARE_DATES`` dates per destination. Summed, this lands within a
+    few requests of the real count (measured: 93 one-way / 190 round-trip for
+    8 hubs x 3 destinations x 91 days) -- nothing like the grid formula's
+    ~768 for the same inputs.
+
+    Grid (no calendar): the old formula, but over the *sampled* date count --
+    the fallback path only ever queries at most ``FALLBACK_MAX_DATES``
+    distinct dates, however many the user actually picked (see
+    ``engine/grid.py``).
+
+    Both branches are upper bounds: real runs skip hubs and dates that turn
+    out unreachable, and neither branch's phase 1/2 costs are owed at all
+    when a phase has fewer real candidates than these caps assume.
+    """
+    if isinstance(primary_provider(), SupportsCalendar):
+        phase0 = hubs * (1 + dests)
+        if round_trip:
+            phase0 *= 2
+        legs_per_candidate = 4 if round_trip else 2
+        phase1 = SHORTLIST_SIZE * legs_per_candidate
+        phase2 = THROUGH_FARE_DATES * dests
+        return phase0 + phase1 + phase2
+
+    sampled_dates = min(dates, FALLBACK_MAX_DATES)
+    n_queries = hubs * sampled_dates * (1 + dests)
+    return n_queries * 2 if round_trip else n_queries
+
+
 def _summary_text(user_data: dict) -> str:
     """Build the pre-flight summary shown before a search starts."""
     dests = user_data["destinations"]
@@ -405,11 +490,9 @@ def _summary_text(user_data: dict) -> str:
     hubs = user_data["hubs"]
     trip_days = user_data.get("trip_days", 0)
 
-    # Phase 1 queries every hub/date; phase 2 every hub/dest/date. Round trips
-    # double both. This is an upper bound — phase 2 skips unreachable hubs.
-    n_queries = len(hubs) * len(dates) * (1 + len(dests))
-    if trip_days:
-        n_queries *= 2
+    n_queries = _estimate_queries(
+        hubs=len(hubs), dests=len(dests), dates=len(dates), round_trip=bool(trip_days),
+    )
 
     trip_label = f"Round-trip ({trip_days} days)" if trip_days else "One-way"
     return (
@@ -505,6 +588,17 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
             currency=params["currency"],
             dates=dates,
         )
+    except ValueError as exc:
+        # A guided-flow date span is validated before this point (see
+        # _oversized_window_message), but a history rerun of a search saved
+        # before that validation existed can still reach run_search with an
+        # oversized window. run_search's own ValueError message is already
+        # written for a human (review finding I6) -- show it verbatim rather
+        # than the generic "check the logs" message below, which would send
+        # someone hunting for a bug that isn't there.
+        logger.warning("Search rejected for %s: %s", params, exc)
+        await bot.send_message(chat_id=chat_id, text=f"Search failed: {esc(exc)}")
+        return
     except Exception:
         logger.exception("Search failed for %s", params)
         await bot.send_message(

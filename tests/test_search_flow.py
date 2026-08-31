@@ -3,12 +3,16 @@
 ``run_and_report`` (shared by the guided flow and history reruns) is where
 Layer 2's review found the branch's own invariants stop being enforced: the
 discrete date list the user actually asked for gets silently widened into a
-window (C1). These tests fake ``engine.run_search`` (imported into
-``handlers.search_flow``'s own namespace) and a Telegram bot, the same "fake
-the engine call, not the provider layer" approach ``tests/test_scheduler.py``
-uses for ``check_favorites`` -- ``run_and_report`` is a plain async function,
-not a decorated Telegram handler, so it can be called directly with no
+window (C1), and error counters are collected and thrown away (C2). These
+tests fake ``engine.run_search`` (imported into ``handlers.search_flow``'s
+own namespace) and a Telegram bot, the same "fake the engine call, not the
+provider layer" approach ``tests/test_scheduler.py`` uses for
+``check_favorites`` -- ``run_and_report`` is a plain async function, not a
+decorated Telegram handler, so it can be called directly with no
 ``Update``/``Context`` scaffolding.
+
+``_oversized_window_message`` and ``_estimate_queries`` (I6, I4) are tested
+directly as the pure functions they are.
 """
 from __future__ import annotations
 
@@ -20,7 +24,8 @@ import pytest
 
 import db as db_module
 import handlers.search_flow as search_flow_module
-from handlers.search_flow import run_and_report
+from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
+from handlers.search_flow import _oversized_window_message, run_and_report
 from models import Itinerary
 from providers.base import Offer
 
@@ -33,6 +38,33 @@ class FakeBot:
 
     async def send_message(self, chat_id, text, **kwargs):
         self.messages.append(text)
+
+
+class _FakeCalendarProvider:
+    """Enough of SupportsCalendar for isinstance() -- never actually called."""
+
+    name = "fake-cal"
+
+    async def price_calendar(self, query):
+        raise AssertionError("not called by these tests")
+
+    async def search_leg(self, query):
+        raise AssertionError("not called by these tests")
+
+    async def aclose(self):
+        return None
+
+
+class _FakeNoCalendarProvider:
+    """No price_calendar -- fails isinstance(_, SupportsCalendar)."""
+
+    name = "fake-nocal"
+
+    async def search_leg(self, query):
+        raise AssertionError("not called by these tests")
+
+    async def aclose(self):
+        return None
 
 
 def _offer(price: str) -> Offer:
@@ -196,3 +228,123 @@ async def test_a_clean_search_with_no_errors_says_nothing_extra(temp_db, fake_en
 
     sent_text = "\n".join(bot.messages)
     assert "incomplete" not in sent_text
+
+
+# ── I4: the pre-flight query estimate ────────────────────────────────────────
+
+
+def test_estimate_queries_two_stage_matches_the_documented_formula(monkeypatch):
+    monkeypatch.setattr(
+        search_flow_module, "primary_provider", lambda: _FakeCalendarProvider(),
+    )
+
+    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=12, round_trip=True)
+
+    phase0 = 8 * (1 + 3) * 2
+    phase1 = SHORTLIST_SIZE * 4
+    phase2 = THROUGH_FARE_DATES * 3
+    assert n == phase0 + phase1 + phase2
+
+
+def test_estimate_queries_two_stage_is_close_to_the_real_measured_count(monkeypatch):
+    """README's measured end-to-end count for 8 hubs x 3 destinations x
+    91 days, round-trip, is 190 requests. The old formula quoted 768 for the
+    same inputs -- 4x too high, and inverted the branch's own headline
+    claim. The new estimate must land within a small margin of the real
+    figure, not the old grid-shaped one."""
+    monkeypatch.setattr(
+        search_flow_module, "primary_provider", lambda: _FakeCalendarProvider(),
+    )
+
+    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=14, round_trip=True)
+
+    assert n < 250          # nowhere near the old formula's 768
+    assert abs(n - 190) < 50  # in the neighbourhood of the real measured count
+
+
+def test_estimate_queries_grid_uses_the_sampled_date_count_not_the_raw_one(monkeypatch):
+    monkeypatch.setattr(
+        search_flow_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
+    )
+
+    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=50, round_trip=False)
+
+    assert n == 8 * FALLBACK_MAX_DATES * (1 + 3)
+
+
+def test_estimate_queries_grid_matches_the_old_formula_when_dates_fit_under_the_cap(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        search_flow_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
+    )
+
+    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=5, round_trip=True)
+
+    assert n == 8 * 5 * (1 + 3) * 2
+
+
+# ── I6: an oversized date span is rejected before "Ready?", and again if it
+# somehow still reaches run_search ──────────────────────────────────────────
+
+
+def test_oversized_window_message_names_the_limit():
+    msg = _oversized_window_message("2026-01-01", "2026-06-01")  # 152 days
+    assert msg is not None
+    assert str(MAX_WINDOW_DAYS) in msg
+
+
+def test_window_within_the_limit_has_no_message():
+    assert _oversized_window_message("2026-01-01", "2026-01-10") is None
+
+
+def test_window_exactly_at_the_limit_has_no_message():
+    from models import SearchWindow, add_days
+    start = "2026-01-01"
+    end = add_days(start, MAX_WINDOW_DAYS - 1)
+    assert SearchWindow(start=start, end=end).days == MAX_WINDOW_DAYS
+    assert _oversized_window_message(start, end) is None
+
+
+async def test_run_and_report_surfaces_a_valueerrors_message_instead_of_the_generic_one(
+    temp_db, monkeypatch,
+):
+    """A history rerun of a search saved before I6's early validation existed
+    can still reach run_search with an oversized window. run_search's own
+    ValueError message is written for a human -- it must reach the user
+    verbatim, not the generic "check the bot logs" message."""
+    human_message = (
+        "window 2026-01-01 to 2026-06-01 covers 152 days, more than the "
+        "91-day limit the price calendar supports (MAX_WINDOW_DAYS)"
+    )
+
+    async def raising_run_search(**kwargs):
+        raise ValueError(human_message)
+
+    monkeypatch.setattr(search_flow_module, "run_search", raising_run_search)
+    bot = FakeBot()
+    params = _base_params(dates=["2026-01-01", "2026-06-01"])
+
+    await run_and_report(bot, chat_id=1, params=params)
+
+    assert len(bot.messages) == 1
+    assert "91-day limit" in bot.messages[0]
+    assert "check the bot logs" not in bot.messages[0]
+
+
+async def test_run_and_report_still_uses_the_generic_message_for_other_exceptions(
+    temp_db, monkeypatch,
+):
+    """The distinct ValueError handling must not swallow real failures --
+    anything else still gets the generic, log-pointing message."""
+    async def raising_run_search(**kwargs):
+        raise RuntimeError("provider is down")
+
+    monkeypatch.setattr(search_flow_module, "run_search", raising_run_search)
+    bot = FakeBot()
+    params = _base_params()
+
+    await run_and_report(bot, chat_id=1, params=params)
+
+    assert len(bot.messages) == 1
+    assert "check the bot logs" in bot.messages[0]
