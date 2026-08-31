@@ -26,6 +26,12 @@ DOMESTIC_DISCOUNT already were -- imported by name so a test can monkeypatch
 this module's own attribute, not config's. CROSS_CHECK_TOP_N is deliberately
 left out of that list: it stays a plain module constant, not a deployment
 setting.
+
+A sixth config value, MAX_WINDOW_DAYS, is enforced rather than merely read:
+``run_search`` rejects a window wider than it for a calendar-capable
+provider, before phase 0 issues a single request (see ``run_search``'s own
+docstring). It is not applied to the grid strategy, which never consults a
+calendar and is not subject to the limit that value documents.
 """
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ from config import (
     FALLBACK_MAX_DATES,
     MAX_PER_DATE,
     MAX_PER_HUB,
+    MAX_WINDOW_DAYS,
     SHORTLIST_SIZE,
     THROUGH_FARE_DATES,
 )
@@ -388,9 +395,32 @@ async def run_search(
     single request. An empty result -- no candidate anywhere, or no leg
     reachable from ``origin`` at all -- returns ``itineraries == []``
     cleanly; only a genuinely broken provider raises.
+
+    A ``window`` wider than ``MAX_WINDOW_DAYS`` raises ``ValueError`` when
+    the chosen provider has a calendar -- that is a verified physical limit
+    of the endpoint phase 0 relies on, and a wider request there does not
+    error, it silently prices fewer days than asked for. The grid strategy
+    never consults a calendar, so it is exempt from that check entirely.
     """
     if provider is None:
         provider = primary_provider()
+
+    # MAX_WINDOW_DAYS is a verified physical limit of the price-calendar
+    # endpoint the two-stage strategy depends on (Kiwi's, confirmed against
+    # the live API): a wider window doesn't error there, it silently returns
+    # fewer days than asked for -- a search that looks complete and quietly
+    # isn't. Checked here, before phase 0 issues a single request, so an
+    # oversized window fails loudly instead. The grid strategy never
+    # consults a calendar, so the limit is not physically binding there --
+    # it already bounds its own request count via FALLBACK_MAX_DATES no
+    # matter how wide the window is -- so it is deliberately exempt rather
+    # than rejected for a reason that only applies to the other path.
+    if isinstance(provider, SupportsCalendar) and window.days > MAX_WINDOW_DAYS:
+        raise ValueError(
+            f"window {window.start} to {window.end} covers {window.days} days, "
+            f"more than the {MAX_WINDOW_DAYS}-day limit the price calendar "
+            f"supports (MAX_WINDOW_DAYS)"
+        )
 
     secondary = _pick_secondary(provider)
 

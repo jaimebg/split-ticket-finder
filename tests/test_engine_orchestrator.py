@@ -692,3 +692,87 @@ def test_orchestrator_does_not_shadow_the_config_knobs_with_its_own_literals():
     # CROSS_CHECK_TOP_N is deliberately *not* one of Task 13's config knobs
     # (see the module docstring) -- it stays a plain module constant.
     assert "CROSS_CHECK_TOP_N = 3" in source
+
+
+# ── MAX_WINDOW_DAYS enforcement (Task 13 follow-up) ─────────────────────────
+#
+# 91 days is a verified physical limit of Kiwi's price-calendar endpoint, not
+# a preference: a longer window doesn't error there, it silently returns
+# fewer days than asked for -- a search that looks complete and quietly
+# isn't. Enforcing it here, before phase 0 issues a single request, turns
+# that silent truncation into a self-explaining failure instead.
+#
+# The grid strategy is deliberately exempt: it never consults a calendar, so
+# the 91-day ceiling is not physically binding there, and it already bounds
+# its own request count via FALLBACK_MAX_DATES regardless of window length.
+# Applying the limit uniformly would reject a perfectly satisfiable grid
+# search for a reason that only applies to the calendar path.
+
+async def test_window_at_the_limit_is_accepted(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = FakeCalendarProvider()  # no calendar data anywhere
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    window = SearchWindow("2026-10-01", "2026-12-30")  # 91 days, the default limit
+    assert window.days == orchestrator.MAX_WINDOW_DAYS == 91
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=window, trip_days=0, provider=provider,
+    )
+
+    assert result.itineraries == []  # no calendar data, but no raise either
+
+
+async def test_window_one_day_over_the_limit_raises(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = FakeCalendarProvider()
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    window = SearchWindow("2026-10-01", "2026-12-31")  # 92 days
+    assert window.days == 92
+
+    with pytest.raises(ValueError, match="92") as exc:
+        await run_search(
+            origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+            window=window, trip_days=0, provider=provider,
+        )
+
+    assert "91" in str(exc.value)
+    # Fails before phase 0 issues a single request.
+    assert provider.calls == []
+
+
+async def test_lowered_max_window_days_is_genuinely_honoured(monkeypatch):
+    """Proves config actually reaches the check, rather than a hardcoded 91:
+    a window well within the default limit must still raise once
+    MAX_WINDOW_DAYS itself is lowered below it."""
+    _neutral_discount(monkeypatch)
+    monkeypatch.setattr(orchestrator, "MAX_WINDOW_DAYS", 5)
+    provider = FakeCalendarProvider()
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    window = SearchWindow("2026-10-01", "2026-10-10")  # 10 days -- fine at 91, not at 5
+
+    with pytest.raises(ValueError, match="10") as exc:
+        await run_search(
+            origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+            window=window, trip_days=0, provider=provider,
+        )
+
+    assert "5" in str(exc.value)
+
+
+async def test_grid_strategy_is_exempt_from_the_window_limit(monkeypatch):
+    """No calendar means the limit isn't physically binding, and the grid's
+    own request count is already bounded by FALLBACK_MAX_DATES regardless of
+    how wide the window is."""
+    _neutral_discount(monkeypatch)
+    provider = FakeProvider()  # no price_calendar -> selects the grid strategy
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    huge_window = SearchWindow("2026-01-01", "2026-12-31")  # 365 days
+    assert huge_window.days > orchestrator.MAX_WINDOW_DAYS
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=huge_window, trip_days=0, provider=provider,
+    )
+
+    assert result.strategy == "grid"  # completed without raising
