@@ -223,10 +223,30 @@ async def test_init_db_is_idempotent(temp_db):
         ("<b>bold", "&lt;b&gt;bold"),
         ("a & b", "a &amp; b"),
         ("MAD", "MAD"),
+        ('say "hi"', "say &quot;hi&quot;"),
+        ("it's here", "it&#x27;s here"),
     ],
 )
 def test_user_input_is_escaped_for_html(raw, expected):
     assert esc(raw) == expected
+
+
+def test_esc_escapes_quotes_so_it_is_safe_inside_an_html_attribute():
+    """esc() must be safe in a quoted attribute value, not just text content --
+    search.py interpolates provider-supplied booking URLs into href="...".
+    An unescaped '"' would let that text break out of the attribute."""
+    assert '"' not in esc('say "hi"')
+    assert "'" not in esc("it's here")
+
+
+def test_booking_url_with_an_embedded_quote_cannot_escape_its_href_attribute():
+    """A malicious or malformed booking URL from a third-party provider (Kiwi)
+    must not be able to inject an attribute onto the <a> tag it's rendered
+    into -- the exact vector this regression closes."""
+    malicious_url = 'https://kiwi.com/x?a=1" onmouseover="alert(1)'
+    rendered = f'<a href="{esc(malicious_url)}">Book</a>'
+    assert 'onmouseover="alert' not in rendered
+    assert "&quot;" in rendered
 
 
 # ── Message splitting ───────────────────────────────────────────────────────
