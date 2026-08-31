@@ -197,12 +197,18 @@ async def test_a_date_the_user_asked_for_is_never_dropped_by_filtering(temp_db, 
 # ── C2: broken must not look like empty ──────────────────────────────────────
 
 
-async def test_a_provider_erroring_on_every_request_says_results_may_be_incomplete(
+async def test_a_total_failure_gets_a_distinct_message_not_a_false_empty_headline(
     temp_db, fake_engine,
 ):
     """When Kiwi 403s every calendar request, scan_calendars counts fetch
-    errors and returns an empty grid -- the user must not be told the bare
-    "<b>No routes found.</b>" that reads as a confirmed empty search."""
+    errors and returns an empty grid. The bold "<b>No routes found.</b>"
+    headline must not appear at all here, even with a corrective note in
+    italics underneath -- that states a false fact first, in the part a
+    skimming Telegram user actually reads, with the correction relegated to
+    fine print. That is the same broken-looks-like-empty failure C2 exists
+    to prevent, just softened, and a test asserting "No routes found" is
+    present would teach the next person that ordering is fine. The absence
+    assertion below is what stops that regression, not the wording alone."""
     fake_engine["state"]["itineraries"] = []
     fake_engine["state"]["parse_errors"] = 0
     fake_engine["state"]["fetch_errors"] = 32
@@ -212,9 +218,31 @@ async def test_a_provider_erroring_on_every_request_says_results_may_be_incomple
     await run_and_report(bot, chat_id=1, params=params)
 
     sent_text = "\n".join(bot.messages)
-    assert "No routes found" in sent_text  # still says this...
-    assert "incomplete" in sent_text        # ...but qualified
+    assert "No routes found" not in sent_text  # the load-bearing assertion
+    assert "Search incomplete" in sent_text
     assert "32" in sent_text
+
+
+async def test_a_partial_result_still_shows_results_with_the_note_appended_below(
+    temp_db, fake_engine,
+):
+    """A partial result (some itineraries survived alongside some errors) is
+    genuinely different from a total failure: there are real results to
+    show, so format_results still runs and the caveat is appended below
+    them, where "the results above" is an accurate description -- this
+    behaviour must stay exactly as it was."""
+    fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]
+    fake_engine["state"]["parse_errors"] = 1
+    fake_engine["state"]["fetch_errors"] = 0
+    params = _base_params(dates=["2026-09-01"])
+
+    bot = FakeBot()
+    await run_and_report(bot, chat_id=1, params=params)
+
+    sent_text = "\n".join(bot.messages)
+    assert "2026-09-01" in sent_text
+    assert "incomplete" in sent_text
+    assert "Search incomplete" not in sent_text  # that headline is total-failure only
 
 
 async def test_a_clean_search_with_no_errors_says_nothing_extra(temp_db, fake_engine):

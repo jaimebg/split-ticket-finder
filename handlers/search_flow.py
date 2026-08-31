@@ -611,29 +611,48 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
     itineraries = [itin for itin in result.itineraries if itin.date in requested_dates]
     origin = params["origin"]
     currency = params["currency"]
+    had_errors = bool(result.parse_errors or result.fetch_errors)
 
-    # Empty and broken must never look alike (this project's central rule):
-    # a provider that failed on every request also returns an empty
-    # itinerary list, and without this, that reaches the user as the same
-    # "<b>No routes found.</b>" a route that was genuinely searched and came
-    # back empty gets (review finding C2). Layer 1 logged this aggregate;
-    # this branch's wiring had dropped it entirely.
-    incomplete_notice = ""
-    if result.parse_errors or result.fetch_errors:
+    # Empty and broken must never look alike (this project's central rule,
+    # and the reason C2 was Critical). A provider that failed on every
+    # request also returns an empty itinerary list; showing the same bold
+    # "<b>No routes found.</b>" headline a genuinely empty search gets --
+    # even with a corrective note in italics underneath -- states a false
+    # fact first, in the part a skimming Telegram user actually reads, with
+    # the correction relegated to fine print. That is the same
+    # broken-looks-like-empty failure C2 exists to prevent, only softened.
+    # A total failure (no itineraries at all) therefore gets its own
+    # message instead of format_results ever running. A *partial* result
+    # (some itineraries survived, alongside some errors) is genuinely
+    # different -- there are real results to show, so they are shown, with
+    # the note appended below them, where "the results above" is accurate.
+    if not itineraries and had_errors:
         logger.warning(
             "Search completed with %d parse failures and %d fetch failures "
-            "for %s — results may be incomplete.",
+            "for %s — no results could be confirmed.",
             result.parse_errors, result.fetch_errors, params,
         )
-        incomplete_notice = (
-            "\n\n<i>Note: "
-            f"{result.parse_errors} parse and {result.fetch_errors} fetch "
-            "request(s) failed during this search — treat the results above "
-            "as incomplete, not a confirmed count (including \"no routes "
-            "found\", if that's what you see).</i>"
+        report_text = (
+            "<b>Search incomplete</b> — "
+            f"{result.parse_errors + result.fetch_errors} request(s) failed, "
+            "so no results could be confirmed."
         )
+    else:
+        incomplete_notice = ""
+        if had_errors:
+            logger.warning(
+                "Search completed with %d parse failures and %d fetch failures "
+                "for %s — results may be incomplete.",
+                result.parse_errors, result.fetch_errors, params,
+            )
+            incomplete_notice = (
+                "\n\n<i>Note: "
+                f"{result.parse_errors} parse and {result.fetch_errors} fetch "
+                "request(s) failed during this search — treat the results "
+                "above as incomplete, not a confirmed count.</i>"
+            )
+        report_text = format_results(itineraries, origin, currency) + incomplete_notice
 
-    report_text = format_results(itineraries, origin, currency) + incomplete_notice
     for chunk in split_message(report_text):
         await bot.send_message(
             chat_id=chat_id,
