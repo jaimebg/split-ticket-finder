@@ -178,6 +178,28 @@ DB_PATH = os.getenv("DB_PATH", "flight_finder.db")
 ALERT_INTERVAL_HOURS = _int_env("ALERT_INTERVAL_HOURS", 6, lo=1)
 PRICE_DROP_THRESHOLD = _float_env("PRICE_DROP_THRESHOLD", 0.10, lo=0.0, hi=1.0)
 
+# ── Engine tuning ────────────────────────────────────────
+# The two-stage engine's own knobs. Defaults are the numbers the engine was
+# verified against end to end (32 calendar requests -> 2,184 ranked
+# candidates -> ~30 confirmed -> 92 requests total); changing one changes
+# that request-count story, so do it deliberately.
+
+# K — how many of phase 0's ranked candidates get confirmed against real
+# offers in phase 1. Raising it finds more at the cost of more requests.
+SHORTLIST_SIZE = _int_env("SHORTLIST_SIZE", 30, lo=1)
+# Diversity caps applied to that shortlist, so one unusually cheap hub or
+# date can't crowd out every other option.
+MAX_PER_HUB = _int_env("MAX_PER_HUB", 6, lo=1)
+MAX_PER_DATE = _int_env("MAX_PER_DATE", 4, lo=1)
+# Distinct dates priced for the through-fare (single-ticket) baseline.
+THROUGH_FARE_DATES = _int_env("THROUGH_FARE_DATES", 3, lo=1)
+# Dates sampled by the grid fallback, for a provider with no price calendar.
+FALLBACK_MAX_DATES = _int_env("FALLBACK_MAX_DATES", 12, lo=1)
+# Upper bound on a search window, in days — the verified limit of Kiwi's
+# price-calendar endpoint (see providers/kiwi.py). A window wider than this
+# is more than the calendar the engine relies on can actually answer.
+MAX_WINDOW_DAYS = _int_env("MAX_WINDOW_DAYS", 91, lo=1)
+
 
 def validate() -> None:
     """Fail fast with an actionable message if required config is missing.
@@ -200,6 +222,19 @@ def validate() -> None:
         problems.append(
             f"PRIMARY_PROVIDER is {PRIMARY_PROVIDER!r} but PROVIDERS is "
             f"{', '.join(PROVIDERS)} — the primary provider must be enabled"
+        )
+    # A diversity cap larger than the shortlist it filters can never actually
+    # trigger — every candidate already fits under it — so it silently does
+    # nothing. That reads as a broken filter, not a harmless no-op.
+    if MAX_PER_HUB > SHORTLIST_SIZE:
+        problems.append(
+            f"MAX_PER_HUB ({MAX_PER_HUB}) is greater than SHORTLIST_SIZE ({SHORTLIST_SIZE}) "
+            "— it would never actually cap anything"
+        )
+    if MAX_PER_DATE > SHORTLIST_SIZE:
+        problems.append(
+            f"MAX_PER_DATE ({MAX_PER_DATE}) is greater than SHORTLIST_SIZE ({SHORTLIST_SIZE}) "
+            "— it would never actually cap anything"
         )
     if problems:
         raise ConfigError(

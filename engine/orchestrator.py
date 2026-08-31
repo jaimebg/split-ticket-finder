@@ -19,22 +19,28 @@ single-PNR through-fare) and a cross-check tagging step (spec §5.7).
 
 Five of this module's tuning knobs -- shortlist size, the per-hub/per-date
 diversity caps, how many dates the through-fare baseline covers, and how
-many dates the grid fallback samples -- are Task 13's config knobs, not
-built yet. They are module-level constants with the plan's own defaults
-until Task 13 wires them through as parameters; this module deliberately
-does not add them to config.py itself.
-
-The domestic-leg discount (DISCOUNT_AIRPORTS / DOMESTIC_DISCOUNT) already
-exists in config.py, so it is read from there directly, the same way
-search.py and scheduler.py already do -- imported by name so a test can
-monkeypatch this module's own attribute, not config's.
+many dates the grid fallback samples -- are Task 13's config knobs
+(SHORTLIST_SIZE, MAX_PER_HUB, MAX_PER_DATE, THROUGH_FARE_DATES,
+FALLBACK_MAX_DATES), read from config.py the same way DISCOUNT_AIRPORTS /
+DOMESTIC_DISCOUNT already were -- imported by name so a test can monkeypatch
+this module's own attribute, not config's. CROSS_CHECK_TOP_N is deliberately
+left out of that list: it stays a plain module constant, not a deployment
+setting.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
 
-from config import DISCOUNT_AIRPORTS, DOMESTIC_DISCOUNT
+from config import (
+    DISCOUNT_AIRPORTS,
+    DOMESTIC_DISCOUNT,
+    FALLBACK_MAX_DATES,
+    MAX_PER_DATE,
+    MAX_PER_HUB,
+    SHORTLIST_SIZE,
+    THROUGH_FARE_DATES,
+)
 from engine.drill import PHASE as CONFIRM_PHASE
 from engine.drill import PHASE_THROUGH_FARE, confirm, through_fares
 from engine.fetch import LegFetcher
@@ -54,13 +60,6 @@ from providers.registry import enabled_providers, primary_provider
 
 STRATEGY_TWO_STAGE = "two-stage"
 STRATEGY_GRID = "grid"
-
-# Task 13's knobs (spec §5.4/§5.5/§5.6), taken as module defaults until then.
-SHORTLIST_SIZE = 30
-MAX_PER_HUB = 6
-MAX_PER_DATE = 4
-THROUGH_FARE_DATES = 3
-FALLBACK_MAX_DATES = 12
 
 # Not a Task-13 knob: LegFetcher/scan_calendars need *some* concurrency and
 # per-worker delay, and run_search's own signature takes neither as a

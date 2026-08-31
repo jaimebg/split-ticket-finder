@@ -19,10 +19,12 @@ tests/test_engine_grid.py).
 from __future__ import annotations
 
 import dataclasses
+import inspect
 from decimal import Decimal
 
 import pytest
 
+import config
 import engine.orchestrator as orchestrator
 from engine.orchestrator import SearchResult, run_search
 from models import CancelToken, Progress, SearchCancelled, SearchWindow
@@ -662,3 +664,31 @@ async def test_grid_with_no_results_returns_cleanly(monkeypatch):
     assert result.itineraries == []
     assert result.strategy == "grid"
     assert result.scan is None
+
+
+# ── Task 13: engine knobs come from config, not hardcoded module constants ──
+
+_CONFIG_KNOBS = (
+    "SHORTLIST_SIZE", "MAX_PER_HUB", "MAX_PER_DATE",
+    "THROUGH_FARE_DATES", "FALLBACK_MAX_DATES",
+)
+
+
+def test_orchestrator_knobs_match_configs_defaults():
+    for name in _CONFIG_KNOBS:
+        assert getattr(orchestrator, name) == getattr(config, name)
+
+
+def test_orchestrator_does_not_shadow_the_config_knobs_with_its_own_literals():
+    """These five used to be bare module constants (SHORTLIST_SIZE = 30,
+    etc). Task 13 moved them into config.py; a hardcoded re-assignment left
+    behind here would silently shadow the deployment knob -- overriding
+    SHORTLIST_SIZE via .env would then do nothing at all. Source-inspect
+    for the tell-tale ``NAME = <literal>`` pattern rather than only
+    comparing values, since the defaults are identical either way."""
+    source = inspect.getsource(orchestrator)
+    for name in _CONFIG_KNOBS:
+        assert f"{name} = " not in source, f"{name} must be imported from config, not reassigned"
+    # CROSS_CHECK_TOP_N is deliberately *not* one of Task 13's config knobs
+    # (see the module docstring) -- it stays a plain module constant.
+    assert "CROSS_CHECK_TOP_N = 3" in source
