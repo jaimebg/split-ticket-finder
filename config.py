@@ -180,8 +180,9 @@ PRICE_DROP_THRESHOLD = _float_env("PRICE_DROP_THRESHOLD", 0.10, lo=0.0, hi=1.0)
 
 # ── Engine tuning ────────────────────────────────────────
 # The two-stage engine's own knobs. Defaults are the numbers the engine was
-# verified against end to end (32 calendar requests -> 2,184 ranked
-# candidates -> ~30 confirmed -> 92 requests total); changing one changes
+# measured against end to end, single provider, 8 hubs x 3 destinations,
+# 91-day window: 93 requests one-way, 190 round-trip (14 days) -- phase 0
+# (32 / 64) + phase 1 (58 / 120) + phase 2 (3 / 6). Changing one changes
 # that request-count story, so do it deliberately.
 
 # K — how many of phase 0's ranked candidates get confirmed against real
@@ -191,7 +192,9 @@ SHORTLIST_SIZE = _int_env("SHORTLIST_SIZE", 30, lo=1)
 # date can't crowd out every other option.
 MAX_PER_HUB = _int_env("MAX_PER_HUB", 6, lo=1)
 MAX_PER_DATE = _int_env("MAX_PER_DATE", 4, lo=1)
-# Distinct dates priced for the through-fare (single-ticket) baseline.
+# Distinct dates priced for the through-fare (single-ticket) baseline. Only
+# a confirmed itinerary landing on one of those dates gets a savings figure;
+# raising this shows one on more results, at the cost of more requests.
 THROUGH_FARE_DATES = _int_env("THROUGH_FARE_DATES", 3, lo=1)
 # Dates sampled by the grid fallback, for a provider with no price calendar.
 FALLBACK_MAX_DATES = _int_env("FALLBACK_MAX_DATES", 12, lo=1)

@@ -79,25 +79,42 @@ arithmetic on numbers already in hand — it costs zero further requests, and a
 **Phase 1 — confirm.** Only a diverse shortlist of the cheapest candidates —
 capped per hub and per date, so one unusually cheap Tuesday can't crowd out
 every other option — gets checked against real, bookable offers. This is the
-one phase that spends real request budget per candidate, which is exactly why
-it runs against a capped shortlist instead of the full ranking.
+one phase that spends real request budget, and it spends it per *leg*, not
+per candidate: a round-trip itinerary needs up to four real offers (domestic
+and onward, each way) against a one-way itinerary's two, which is most of why
+a round-trip search costs roughly double a one-way one overall.
 
 **Phase 2 — baseline.** The airline's own single-ticket through-fare is priced
-for a handful of dates, so the bot can tell you *"you save 173 EUR"* instead of
-just asserting that splitting the ticket is worth it.
+for the cheapest `THROUGH_FARE_DATES` (default 3) distinct dates among the
+confirmed itineraries — not every one of them, since pricing every distinct
+date the shortlist touches would add meaningfully more requests for
+diminishing benefit. So the bot can tell you *"you save 173 EUR"* for an
+itinerary that lands on one of those dates, but says nothing for one that
+doesn't; in the measurements below that was 3 of 30 confirmed itineraries
+one-way and 5 of 30 round-trip (a date can serve more than one itinerary,
+when several share it). A result with no savings line isn't broken — it
+simply wasn't one of the dates priced against the baseline.
 
-This was verified end to end on a real search:
+Measured end to end against a single provider (so a cross-check against a
+second one doesn't distort the count), 8 hubs, 3 destinations, over a 91-day
+window:
 
-| | Requests | Coverage |
+| Phase | One-way | Round-trip (14 days) |
 |---|---|---|
-| Old grid search | ~640 | 10 sampled dates |
-| Two-stage engine | 92 | every day in a 91-day window |
+| 0 — calendars | 32 | 64 |
+| 1 — confirm | 58 | 120 |
+| 2 — through-fare | 3 | 6 |
+| **Total** | **93** | **190** |
 
-That is not a projection — 32 calendar requests price the whole window, those
-combine for free into 2,184 ranked candidates, roughly 30 get confirmed against
-real offers, and the through-fare baseline brings the total to 92 requests for
-a search that covers nine times more days than the ~640-request grid search it
-replaced.
+The old grid search's request count is not a matching measurement — that code
+no longer exists, and was never instrumented to compare against directly. It
+is a computed figure from the grid's own per-leg query count, the same one
+used under "Notes on some decisions" below: a round-trip search over the
+same 8 hubs, 3 destinations and a *sampled* 10 dates costs ~640 queries. Comparing
+like for like, round-trip to round-trip, the two-stage engine's 190 requests
+cover the entire 91-day window — nine times more days than those 10 samples —
+for under a third of the old grid's request count; the one-way case, at 93,
+costs even less.
 
 Not every provider has a price calendar. Google doesn't, so a Google-only
 deployment falls back to the old grid search: it still works, but it goes back
