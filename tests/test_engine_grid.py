@@ -17,7 +17,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from engine.fetch import LegFetcher
-from engine.grid import FALLBACK_MAX_DATES, run_grid_search
+from engine.grid import FALLBACK_MAX_DATES, _sample_explicit_dates, run_grid_search
 from models import SearchWindow
 from tests.test_engine_fetch import FakeProvider, _offer
 
@@ -332,3 +332,75 @@ async def test_empty_hubs_makes_no_requests():
     )
     assert result == []
     assert provider.seen == []
+
+
+# ── explicit_dates (review finding C1) ──────────────────────────────────────
+#
+# A caller with a discrete list of dates it actually wants searched (the
+# guided search flow's own list, say) must have the grid path search those
+# dates directly, not silently resample its own from the window instead --
+# a window-derived sample can drop dates the caller explicitly asked for.
+
+
+async def test_explicit_dates_are_searched_even_when_a_window_sample_would_miss_them():
+    """The concrete C1 scenario: two dates 19 days apart. A window-derived
+    sample at the default cap steps past the window's own end date and never
+    queries it (10 evenly-spaced dates over a 20-day window, none of them
+    day 20). Passing the two dates explicitly must guarantee both are hit."""
+    window = SearchWindow("2026-09-01", "2026-09-20")
+    provider = FakeProvider()
+
+    # Without explicit_dates, the window sample misses day 20 -- pinning the
+    # regression this fix closes.
+    without_explicit = FakeProvider()
+    await run_grid_search(
+        _fetcher(without_explicit), origin="LPA", dests=["NRT"], hubs=["MAD"],
+        window=window, trip_days=0, hub_names={}, dest_names={},
+        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+    )
+    assert "2026-09-20" not in {date for _, _, date in _seen(without_explicit)}
+
+    await run_grid_search(
+        _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
+        window=window, trip_days=0, hub_names={}, dest_names={},
+        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        explicit_dates=["2026-09-01", "2026-09-20"],
+    )
+
+    dates_queried = {date for _, _, date in _seen(provider)}
+    assert dates_queried == {"2026-09-01", "2026-09-20"}
+
+
+async def test_explicit_dates_beyond_the_cap_are_sampled_but_keep_both_extremes():
+    window = SearchWindow("2026-09-01", "2026-09-20")
+    dates = [f"2026-09-{d:02d}" for d in range(1, 21)]  # 20 explicit dates
+    provider = FakeProvider()
+
+    await run_grid_search(
+        _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
+        window=window, trip_days=0, hub_names={}, dest_names={},
+        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        max_dates=5, explicit_dates=dates,
+    )
+
+    dates_queried = {date for _, _, date in _seen(provider)}
+    assert len(dates_queried) <= 5
+    assert "2026-09-01" in dates_queried
+    assert "2026-09-20" in dates_queried
+    assert dates_queried <= set(dates)
+
+
+def test_sample_explicit_dates_keeps_first_and_last_and_dedupes():
+    dates = [f"2026-09-{d:02d}" for d in range(1, 21)] + ["2026-09-01"]  # dup
+    sampled = _sample_explicit_dates(dates, 5)
+
+    assert len(sampled) == 5
+    assert sampled[0] == "2026-09-01"
+    assert sampled[-1] == "2026-09-20"
+    assert sampled == sorted(sampled)
+    assert set(sampled) <= set(dates)
+
+
+def test_sample_explicit_dates_returns_all_deduped_when_under_the_cap():
+    dates = ["2026-09-05", "2026-09-01", "2026-09-01"]
+    assert _sample_explicit_dates(dates, 5) == ["2026-09-01", "2026-09-05"]

@@ -328,6 +328,7 @@ async def _run_grid(
     currency: str,
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
+    dates: list[str] | None = None,
 ) -> tuple[list[Itinerary], None, int, int]:
     """The four-phase grid fallback, plus the through-fare baseline.
 
@@ -337,6 +338,12 @@ async def _run_grid(
     onward leg as "Phase 2", so ``through_fares``' own hardcoded "Phase 2"
     is relabelled to ``GRID_THROUGH_FARE_PHASE`` before it runs -- otherwise
     a caller would see "Phase 2" finish, then restart at 0/M.
+
+    ``dates``, when given, is forwarded to ``run_grid_search`` as
+    ``explicit_dates`` -- see C1 in the Layer 2 review: a caller with a
+    discrete list of dates it actually wants searched (rather than an
+    arbitrary window to sample from) must have the grid path search those
+    dates, not silently resample its own from the window instead.
     """
     _check_cancel(cancel)
     relabel = _PhaseRelabeler(on_progress)
@@ -347,6 +354,7 @@ async def _run_grid(
         window=window, trip_days=trip_days, hub_names=hubs, dest_names=destinations,
         discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
         adults=adults, currency=currency, max_dates=FALLBACK_MAX_DATES,
+        explicit_dates=dates,
     )
 
     _check_cancel(cancel)
@@ -372,6 +380,7 @@ async def run_search(
     provider: FlightProvider | None = None,
     cancel: CancelToken | None = None,
     on_progress: ProgressCallback | None = None,
+    dates: list[str] | None = None,
 ) -> SearchResult:
     """Run a full split-ticket search and return every phase's output as one result.
 
@@ -388,6 +397,18 @@ async def run_search(
     anything else runs the grid fallback. Both finish with a through-fare
     baseline and a cross-check against a second enabled provider, if one
     exists (spec §5.7).
+
+    ``dates``, when given, is a caller's discrete list of departure dates it
+    actually wants searched -- distinct from ``window``, which both
+    strategies need regardless (the two-stage calendar covers a whole window
+    for one request; the grid fallback needs *some* range to sample from
+    when it has no such discrete list). It is used only by the grid
+    fallback, forwarded as ``run_grid_search``'s ``explicit_dates`` so those
+    dates are queried directly instead of being resampled from ``window``
+    (review finding C1). The two-stage strategy ignores it: it already prices
+    every day in ``window`` for the same one calendar request, so there is
+    nothing to resample away in the first place -- a caller that only wants
+    a subset of those days back must filter the returned itineraries itself.
 
     Cancellation is checked between every phase (see ``_run_two_stage`` /
     ``_run_grid`` / ``_cross_check``); a token cancelled after one phase
@@ -436,7 +457,7 @@ async def run_search(
         itineraries, scan, parse_errors, fetch_errors = await _run_grid(
             provider, origin=origin, destinations=destinations, hubs=hubs,
             window=window, trip_days=trip_days, adults=adults, currency=currency,
-            cancel=cancel, on_progress=on_progress,
+            cancel=cancel, on_progress=on_progress, dates=dates,
         )
 
     tagged, xc_parse_errors, xc_fetch_errors = await _cross_check(

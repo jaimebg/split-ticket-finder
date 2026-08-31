@@ -61,6 +61,26 @@ def _sample_dates(window: SearchWindow, max_dates: int) -> list[str]:
     return generate_dates(window.start, window.end, every)
 
 
+def _sample_explicit_dates(dates: list[str], max_dates: int) -> list[str]:
+    """Evenly sample at most *max_dates* dates out of an explicit list.
+
+    Unlike ``_sample_dates``, every date here was asked for directly by a
+    caller that already knows exactly which dates it wants -- so this always
+    keeps the first and last date (a window-based ``every`` step can silently
+    drop either end, which is the C1 regression this function exists to avoid
+    for the grid path), sampling only the interior when there are more than
+    *max_dates* of them. Returns them sorted, de-duplicated.
+    """
+    ordered = sorted(set(dates))
+    if len(ordered) <= max_dates:
+        return ordered
+    if max_dates <= 1:
+        return [ordered[0]]
+    step = (len(ordered) - 1) / (max_dates - 1)
+    indices = sorted({round(i * step) for i in range(max_dates)})
+    return [ordered[i] for i in indices]
+
+
 async def run_grid_search(
     fetcher: LegFetcher,
     *,
@@ -76,6 +96,7 @@ async def run_grid_search(
     adults: int,
     currency: str,
     max_dates: int = FALLBACK_MAX_DATES,
+    explicit_dates: list[str] | None = None,
 ) -> list[Itinerary]:
     """Run the four-phase grid search and return confirmed itineraries.
 
@@ -84,6 +105,17 @@ async def run_grid_search(
     ``dests`` or ``hubs`` makes no requests at all and returns ``[]`` --
     there is nothing to search, so there is nothing worth phase 1 querying
     either.
+
+    ``explicit_dates``, when given, is queried directly (sampled down to
+    *max_dates* only if it has more entries than that) instead of evenly
+    sampling ``window`` -- a caller that already knows exactly which dates it
+    wants (the guided search flow's discrete date list, say) must have those
+    dates actually searched, not silently replaced by a window-derived sample
+    that can miss the very dates that were asked for (see C1 in the Layer 2
+    review: a 20-day window sampled at the default cap dropped the window's
+    own end date). ``None`` (the default) preserves the old window-sampling
+    behaviour for callers with no discrete list of their own, such as the
+    scheduler's price-tracking re-checks.
 
     Every returned ``Itinerary`` is built only from combinations where every
     leg the trip shape needs (domestic and onward outbound always, both
@@ -104,7 +136,11 @@ async def run_grid_search(
         return []
 
     round_trip = trip_days > 0
-    dates = _sample_dates(window, max_dates)
+    dates = (
+        _sample_explicit_dates(explicit_dates, max_dates)
+        if explicit_dates
+        else _sample_dates(window, max_dates)
+    )
 
     # ── Phase 1: outbound discounted leg (origin -> hubs) ───────────────────
     phase1_queries = [

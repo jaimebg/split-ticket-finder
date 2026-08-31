@@ -480,6 +480,16 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
     flow (or a history rerun) collected; the engine wants a contiguous
     ``SearchWindow``, so it is converted here, once, rather than pushed onto
     every caller.
+
+    ``dates`` is also forwarded to ``run_search`` itself (as ``dates=``) and
+    used again here to filter the returned itineraries down to
+    ``date in set(dates)`` (review finding C1): the two-stage strategy prices
+    every day of the window "for free", and the grid fallback resamples its
+    own dates from the window when it isn't told otherwise -- neither of
+    those is the same thing as "the exact dates the user asked for", and a
+    result on a date nobody requested must never reach display or storage,
+    just as a date the user did explicitly ask for must never be silently
+    dropped.
     """
     dates = params["dates"]
     window = SearchWindow(start=min(dates), end=max(dates))
@@ -493,6 +503,7 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
             trip_days=params.get("trip_days", 0),
             adults=params["adults"],
             currency=params["currency"],
+            dates=dates,
         )
     except Exception:
         logger.exception("Search failed for %s", params)
@@ -502,7 +513,8 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
         )
         return
 
-    itineraries = result.itineraries
+    requested_dates = set(dates)
+    itineraries = [itin for itin in result.itineraries if itin.date in requested_dates]
     origin = params["origin"]
     currency = params["currency"]
 
