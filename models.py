@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -16,26 +16,6 @@ from providers.base import Offer
 
 # Money is rounded to cents only where a value is derived; never at input.
 _CENTS = Decimal("0.01")
-
-
-@dataclass
-class Route:
-    date: str
-    hub: str
-    hub_name: str
-    dest: str
-    dest_name: str
-    dom_price: int
-    dom_discounted: float
-    intl_price: int
-    total: float
-    return_date: str = ""
-    dom_airlines: list[str] = field(default_factory=list)
-    dom_stops: int = 0
-    dom_dur: int = 0
-    intl_airlines: list[str] = field(default_factory=list)
-    intl_stops: int = 0
-    intl_dur: int = 0
 
 
 class SearchCancelled(RuntimeError):

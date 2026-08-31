@@ -16,6 +16,7 @@ from telegram.ext import (
 
 from config import DEFAULT_HUBS, ORIGIN, PORTUGAL_HUBS, SPAIN_HUBS
 from db import save_search
+from engine import run_search
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only, owner_only_callback
 from handlers.utils import (
     ValidationError,
@@ -26,8 +27,8 @@ from handlers.utils import (
     parse_positive_int,
     split_message,
 )
-from models import generate_dates
-from search import format_results, routes_to_json, run_search
+from models import SearchWindow, generate_dates
+from search import format_results, itineraries_to_json, scan_to_json
 
 logger = logging.getLogger(__name__)
 
@@ -475,10 +476,24 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
 
     Shared by the guided flow and by history reruns so both paths store the same
     fields — notably ``trip_days``, without which a rerun would silently change
-    the trip shape.
+    the trip shape. ``params["dates"]`` is the discrete date list the guided
+    flow (or a history rerun) collected; the engine wants a contiguous
+    ``SearchWindow``, so it is converted here, once, rather than pushed onto
+    every caller.
     """
+    dates = params["dates"]
+    window = SearchWindow(start=min(dates), end=max(dates))
+
     try:
-        routes = await run_search(**params)
+        result = await run_search(
+            origin=params["origin"],
+            destinations=params["destinations"],
+            hubs=params["hubs"],
+            window=window,
+            trip_days=params.get("trip_days", 0),
+            adults=params["adults"],
+            currency=params["currency"],
+        )
     except Exception:
         logger.exception("Search failed for %s", params)
         await bot.send_message(
@@ -487,10 +502,11 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
         )
         return
 
+    itineraries = result.itineraries
     origin = params["origin"]
     currency = params["currency"]
 
-    for chunk in split_message(format_results(routes, origin, currency)):
+    for chunk in split_message(format_results(itineraries, origin, currency)):
         await bot.send_message(
             chat_id=chat_id,
             text=chunk,
@@ -498,19 +514,27 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
             disable_web_page_preview=True,
         )
 
-    results_data = json.loads(routes_to_json(routes)) if routes else None
-    best = routes[0] if routes else None
+    results_data = json.loads(itineraries_to_json(itineraries)) if itineraries else None
+    # scan_to_json(None) is the JSON literal "null" -> json.loads gives None,
+    # so this is safe for both strategies without branching on result.scan here.
+    scan_data = json.loads(scan_to_json(result.scan))
+    best = itineraries[0] if itineraries else None
     search_id = await save_search(
         origin=origin,
         destinations=list(params["destinations"]),
-        dates=params["dates"],
+        dates=dates,
         hubs=list(params["hubs"]),
         adults=params["adults"],
         currency=currency,
         trip_days=params.get("trip_days", 0),
-        best_price=best.total if best else None,
+        window_start=window.start,
+        window_end=window.end,
+        provider=best.providers[0] if best and best.providers else None,
+        best_price=float(best.total) if best else None,
         best_route=f"{origin}->{best.hub}->{best.dest} {best.date}" if best else None,
+        through_fare=best.through_fare if best else None,
         results=results_data,
+        scan_json=scan_data,
     )
 
     if not best:
@@ -524,7 +548,7 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
     await bot.send_message(
         chat_id=chat_id,
         text=(
-            f"Best route: <b>{best.total:,.0f} {currency}</b> "
+            f"Best route: <b>{best.total:,.2f} {currency}</b> "
             f"via {esc(best.hub)} to {esc(best.dest)} on {best.date}"
         ),
         parse_mode="HTML",

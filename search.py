@@ -1,395 +1,282 @@
-"""Async search orchestrator — ties scraper + config into a multi-phase search."""
+"""Presentation for search results: Telegram HTML rendering and JSON storage.
+
+This is what remains of the pre-engine orchestrator once engine/ took over
+actually searching (Tasks 9-11): a place to turn a list of ``Itinerary`` into
+Telegram markup, and into the compact JSON blob the ``searches`` table
+stores. Layer 3 rewrites presentation and will own this file next; until
+then it stays intentionally plain.
+"""
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
+from decimal import Decimal
 
-from config import (
-    DEFAULT_DELAY,
-    DISCOUNT_AIRPORTS,
-    DOMESTIC_DISCOUNT,
-    MAX_CONCURRENCY,
-)
-from models import Route, add_days, fmt_dur
-from providers.google import (
-    FetchError,
-    FlightResult,
-    ParseError,
-    build_client,
-    build_url,
-    search,
-)
+from engine.scan import CalendarGrid
+from handlers.utils import esc
+from models import Itinerary
+from providers.base import RatedPrice
 
-logger = logging.getLogger(__name__)
-
-# A leg is one origin->destination query on one date.
-Leg = tuple[str, str, str]
+_CENTS = Decimal("0.01")
 
 
-class _LegFetcher:
-    """Runs many leg queries with bounded concurrency and a per-worker delay.
+# ── JSON serializers ─────────────────────────────────────────────────────────
 
-    A search issues hundreds of requests. Running them one at a time (the
-    original design) took tens of minutes; running them all at once would get
-    the scraper blocked. This caps in-flight requests at MAX_CONCURRENCY and
-    still spaces out each worker's requests by DEFAULT_DELAY, so throughput
-    scales with the cap while the request rate stays predictable.
+def itineraries_to_json(itineraries: list[Itinerary]) -> str:
+    """Serialize the top 25 itineraries to a compact JSON string for DB storage.
+
+    Real ``Offer`` objects (booking links, exact flight numbers, segments)
+    are not carried into storage — only the derived prices and metadata a
+    redisplay needs. A row reloaded from this JSON is always rendered as an
+    estimate (see ``handlers/history.py``'s reconstruction), which is
+    honest: the numbers are a historical snapshot, not a fresh, bookable
+    quote.
     """
-
-    def __init__(self, client, *, delay: float, concurrency: int):
-        self._client = client
-        self._delay = delay
-        self._concurrency = concurrency
-        self._semaphore = asyncio.Semaphore(concurrency)
-        self.parse_errors = 0
-        self.fetch_errors = 0
-
-    async def _one(self, from_apt, to_apt, date, adults, currency):
-        async with self._semaphore:
-            try:
-                flights = await search(
-                    from_apt, to_apt, date, adults, currency, client=self._client
-                )
-            except ParseError as exc:
-                # Layout change, consent wall or rate limiting — not "no flights".
-                self.parse_errors += 1
-                logger.warning("Parse failed for %s->%s %s: %s", from_apt, to_apt, date, exc)
-                return []
-            except FetchError as exc:
-                self.fetch_errors += 1
-                logger.warning("Fetch failed for %s->%s %s: %s", from_apt, to_apt, date, exc)
-                return []
-            except Exception:
-                self.fetch_errors += 1
-                logger.exception("Unexpected error for %s->%s %s", from_apt, to_apt, date)
-                return []
-            finally:
-                # Hold the slot for the delay so the rate limit is per-worker.
-                if self._delay:
-                    await asyncio.sleep(self._delay)
-            return flights
-
-    async def run(
-        self, legs: list[Leg], adults: int, currency: str, phase: str
-    ) -> dict[Leg, list[FlightResult]]:
-        """Fetch every leg concurrently, returning only those with results."""
-        if not legs:
-            return {}
-
-        logger.info("%s: %d queries (concurrency %d)", phase, len(legs), self._concurrency)
-        results = await asyncio.gather(
-            *(self._one(f, t, d, adults, currency) for f, t, d in legs)
-        )
-
-        found: dict[Leg, list[FlightResult]] = {}
-        for leg, flights in zip(legs, results, strict=True):
-            if flights:
-                found[leg] = flights[:3]
-        logger.info("%s done: %d/%d legs with flights", phase, len(found), len(legs))
-        return found
-
-
-# ── Multi-phase search ──────────────────────────────────────────────────────
-
-async def run_search(
-    origin: str,
-    destinations: dict[str, str],
-    dates: list[str],
-    hubs: dict[str, str],
-    adults: int = 1,
-    currency: str = "EUR",
-    delay: float = DEFAULT_DELAY,
-    trip_days: int = 0,
-    concurrency: int = MAX_CONCURRENCY,
-) -> list[Route]:
-    """Search split-ticket itineraries and return them sorted by total price.
-
-    Runs in phases, because each phase narrows the next: only hubs reachable
-    from *origin* are worth querying for onward flights, which cuts the query
-    count substantially versus a full cross product.
-
-      1.  origin -> hub            (the discounted leg)
-      1R. hub -> origin            (round-trip only)
-      2.  hub -> destination       (the international leg)
-      2R. destination -> hub       (round-trip only)
-
-    Return legs are queried as separate one-way searches rather than as a
-    round-trip query, because the whole point is to book the legs separately.
-
-    Parameters
-    ----------
-    origin : str          – IATA code of departure airport (e.g. "LPA").
-    destinations : dict   – {code: name} of final destinations.
-    dates : list[str]     – Travel dates in "YYYY-MM-DD" format.
-    hubs : dict           – {code: name} of hub airports to route through.
-    adults : int          – Number of adult passengers.
-    currency : str        – Currency code for prices.
-    delay : float         – Seconds each worker waits between its requests.
-    trip_days : int       – Trip duration in days (0 = one-way).
-    concurrency : int     – Maximum requests in flight at once.
-
-    Returns
-    -------
-    list[Route] sorted by ascending total price.
-    """
-    roundtrip = trip_days > 0
-    label = f"round-trip ({trip_days}d)" if roundtrip else "one-way"
-    logger.info(
-        "Search [%s]: %s -> %d hubs -> %d destinations over %d dates",
-        label, origin, len(hubs), len(destinations), len(dates),
-    )
-
-    async with build_client() as client:
-        fetcher = _LegFetcher(client, delay=delay, concurrency=concurrency)
-
-        # ── Phase 1: outbound discounted leg (origin -> hubs) ──────────────
-        dom_found = await fetcher.run(
-            [(origin, hub, date) for hub in hubs for date in dates],
-            adults, currency, "Phase 1 (origin -> hubs)",
-        )
-        # Re-key by (hub, date); the origin is constant across the phase.
-        dom_cache = {(hub, date): f for (_, hub, date), f in dom_found.items()}
-
-        hubs_found = {hub for hub, _ in dom_cache}
-        if not hubs_found:
-            logger.warning("No hub is reachable from %s on any requested date.", origin)
-            return []
-
-        # ── Phase 1R: return discounted leg (hubs -> origin) ───────────────
-        dom_ret_cache: dict[tuple[str, str], list[FlightResult]] = {}
-        if roundtrip:
-            ret_legs = [
-                (hub, origin, add_days(date, trip_days)) for hub, date in dom_cache
-            ]
-            ret_found = await fetcher.run(
-                ret_legs, adults, currency, "Phase 1R (hubs -> origin)"
-            )
-            # Map back from the return date to the outbound date it belongs to.
-            dom_ret_cache = {
-                (hub, date): ret_found[(hub, origin, add_days(date, trip_days))]
-                for hub, date in dom_cache
-                if (hub, origin, add_days(date, trip_days)) in ret_found
-            }
-
-        # ── Phase 2: outbound international leg (hubs -> destinations) ─────
-        intl_cache = await fetcher.run(
-            [
-                (hub, dest, date)
-                for hub, date in dom_cache
-                for dest in destinations
-            ],
-            adults, currency, "Phase 2 (hubs -> destinations)",
-        )
-
-        # ── Phase 2R: return international leg (destinations -> hubs) ──────
-        intl_ret_cache: dict[tuple[str, str, str], list[FlightResult]] = {}
-        if roundtrip:
-            ret_found = await fetcher.run(
-                [
-                    (dest, hub, add_days(date, trip_days))
-                    for hub, dest, date in intl_cache
-                ],
-                adults, currency, "Phase 2R (destinations -> hubs)",
-            )
-            intl_ret_cache = {
-                (hub, dest, date): ret_found[(dest, hub, add_days(date, trip_days))]
-                for hub, dest, date in intl_cache
-                if (dest, hub, add_days(date, trip_days)) in ret_found
-            }
-
-    if fetcher.parse_errors or fetcher.fetch_errors:
-        logger.warning(
-            "Search completed with %d parse failures and %d fetch failures — "
-            "results may be incomplete.",
-            fetcher.parse_errors, fetcher.fetch_errors,
-        )
-
-    # ── Combine ──────────────────────────────────────────────────────────
-    routes: list[Route] = []
-
-    for (hub, date), doms in dom_cache.items():
-        for dest, dest_name in destinations.items():
-            intls = intl_cache.get((hub, dest, date))
-            if not intls:
-                continue
-
-            dom_out = doms[0]
-            is_discounted = hub in DISCOUNT_AIRPORTS
-            discount = DOMESTIC_DISCOUNT if is_discounted else 0
-
-            if roundtrip:
-                dom_rets = dom_ret_cache.get((hub, date))
-                intl_rets = intl_ret_cache.get((hub, dest, date))
-                if not dom_rets or not intl_rets:
-                    continue
-                dom_price = dom_out.price + dom_rets[0].price
-                ret = add_days(date, trip_days)
-            else:
-                dom_price = dom_out.price
-                ret = ""
-
-            dom_discounted = dom_price * (1 - discount)
-
-            for intl_out in intls[:2]:
-                intl_price = (
-                    intl_out.price + intl_rets[0].price if roundtrip else intl_out.price
-                )
-
-                routes.append(Route(
-                    date=date,
-                    hub=hub,
-                    hub_name=hubs.get(hub, hub),
-                    dest=dest,
-                    dest_name=dest_name,
-                    dom_price=dom_price,
-                    dom_discounted=dom_discounted,
-                    intl_price=intl_price,
-                    total=dom_discounted + intl_price,
-                    return_date=ret,
-                    dom_airlines=dom_out.airlines,
-                    dom_stops=dom_out.stops,
-                    dom_dur=dom_out.duration,
-                    intl_airlines=intl_out.airlines,
-                    intl_stops=intl_out.stops,
-                    intl_dur=intl_out.duration,
-                ))
-
-    routes.sort(key=lambda r: r.total)
-    logger.info("Combine done: %d routes", len(routes))
-    return routes
-
-
-# ── JSON serializer ──────────────────────────────────────────────────────────
-
-def routes_to_json(routes: list[Route]) -> str:
-    """Serialize the top 25 routes to a compact JSON string for DB storage."""
-    top = routes[:25]
+    top = itineraries[:25]
     data = [
         {
-            "date": r.date,
-            "return_date": r.return_date,
-            "hub": r.hub,
-            "hub_name": r.hub_name,
-            "dest": r.dest,
-            "dest_name": r.dest_name,
-            "dom_price": r.dom_price,
-            "dom_discounted": round(r.dom_discounted, 2),
-            "intl_price": r.intl_price,
-            "total": round(r.total, 2),
-            "dom_airlines": r.dom_airlines,
-            "intl_airlines": r.intl_airlines,
-            "dom_stops": r.dom_stops,
-            "dom_dur": r.dom_dur,
-            "intl_stops": r.intl_stops,
-            "intl_dur": r.intl_dur,
+            "date": it.date,
+            "return_date": it.return_date,
+            "hub": it.hub,
+            "hub_name": it.hub_name,
+            "dest": it.dest,
+            "dest_name": it.dest_name,
+            "discount": float(it.discount),
+            "dom_price": float(it.dom_price),
+            "dom_discounted": float(it.dom_discounted),
+            "onward_price": float(it.onward_price),
+            "total": float(it.total),
+            "status": it.status,
+            "through_fare": float(it.through_fare) if it.through_fare is not None else None,
+            "savings": float(it.savings) if it.savings is not None else None,
+            "savings_pct": it.savings_pct,
+            "requires_bag_recheck": it.requires_bag_recheck,
+            "providers": list(it.providers),
         }
-        for r in top
+        for it in top
     ]
+    return json.dumps(data, ensure_ascii=False)
+
+
+def scan_to_json(scan: CalendarGrid | None) -> str:
+    """Serialize phase 0's calendar grid to a compact JSON string for DB storage.
+
+    Task 11 added the ``searches.scan_json`` column specifically so a past
+    search can be redisplayed without re-querying; this is what finally
+    writes to it. Deliberately minimal -- a date -> price map per leg key,
+    dropping each day's CHEAP/AVERAGE/EXPENSIVE rating and the grid's own
+    error counters (already folded into the search-level totals a caller
+    tracks separately). A domestic leg is keyed by hub alone; an onward leg
+    by ``"hub|dest"``, since JSON object keys must be strings and the grid
+    itself keys that side on a ``(hub, dest)`` tuple.
+
+    ``scan`` is ``None`` for the grid-fallback strategy (no calendar was
+    ever scanned) and serializes to the JSON literal ``"null"``, so
+    ``json.loads(scan_to_json(scan))`` is always safe to call regardless of
+    which strategy ran.
+    """
+    if scan is None:
+        return "null"
+
+    def _prices(table: dict[str, RatedPrice]) -> dict[str, float]:
+        return {date: float(rated.price) for date, rated in table.items()}
+
+    data = {
+        "out_dom": {hub: _prices(table) for hub, table in scan.out_dom.items()},
+        "ret_dom": {hub: _prices(table) for hub, table in scan.ret_dom.items()},
+        "out_onward": {
+            f"{hub}|{dest}": _prices(table)
+            for (hub, dest), table in scan.out_onward.items()
+        },
+        "ret_onward": {
+            f"{hub}|{dest}": _prices(table)
+            for (hub, dest), table in scan.ret_onward.items()
+        },
+    }
     return json.dumps(data, ensure_ascii=False)
 
 
 # ── Telegram formatter ───────────────────────────────────────────────────────
 
-def _stops_label(n: int) -> str:
-    if n == 0:
-        return "direct"
-    return f"{n} stop{'s' if n != 1 else ''}"
+def _through_fare_for(itin: Itinerary, fallback: Decimal | None) -> Decimal | None:
+    """The through-fare baseline to render for *itin*.
+
+    Prefers the itinerary's own (attached by the engine, keyed to its exact
+    destination and date); falls back to *fallback* only when the itinerary
+    carries none at all — the case for a reconstructed legacy row, which
+    never stored one.
+    """
+    return itin.through_fare if itin.through_fare is not None else fallback
+
+
+def _savings_lines(
+    itin: Itinerary, origin: str, currency: str, fallback: Decimal | None
+) -> list[str]:
+    """The savings block for one itinerary (spec §5.5).
+
+    A through-fare that is cheaper than the split is not a saving — it is
+    the opposite of the product's whole premise, and rendering it as one
+    ("You save -11.25 EUR") would recommend the more expensive option. When
+    the split does not beat the through-fare, this says so plainly instead.
+    """
+    through_fare = _through_fare_for(itin, fallback)
+    if through_fare is None:
+        return ["  Savings: no single-ticket fare available"]
+
+    savings = (through_fare - itin.total).quantize(_CENTS)
+    if savings <= 0:
+        return [
+            f"  Through-fare {origin}->{itin.dest}: {through_fare:,.2f} {currency}",
+            "  The through-fare is cheaper — splitting is not worth it for this itinerary.",
+        ]
+
+    if itin.through_fare is not None:
+        pct = itin.savings_pct
+    else:
+        pct = int((savings / through_fare) * 100) if through_fare > 0 else None
+    pct_str = f" ({pct}%)" if pct is not None else ""
+
+    return [
+        f"  Through-fare {origin}->{itin.dest}   {through_fare:,.2f} {currency}",
+        f"  Split via {itin.hub}          {itin.total:,.2f} {currency}",
+        f"  You save               {savings:,.2f} {currency}{pct_str}",
+    ]
+
+
+def _booking_links(itin: Itinerary) -> list[str]:
+    """Booking links for a confirmed itinerary's legs, labelled in trip order.
+
+    Never called for an unconfirmed itinerary — ``format_results`` gates on
+    ``itin.confirmed`` before reaching here: Phase 0's figures are cached
+    cheapest-of-day calendar numbers, not fares anyone could actually book,
+    and an itinerary missing a leg (``STATUS_PARTIAL``) is not bookable as a
+    whole either, even though some of its legs have real offers.
+    """
+    labelled = [
+        ("Domestic out", itin.dom_out),
+        ("Onward out", itin.onward_out),
+        ("Domestic return", itin.dom_ret),
+        ("Onward return", itin.onward_ret),
+    ]
+    return [
+        f'<a href="{esc(offer.booking_url)}">{label}</a>'
+        for label, offer in labelled
+        if offer is not None and offer.booking_url
+    ]
+
+
+def _itinerary_block(
+    i: int, itin: Itinerary, origin: str, currency: str, fallback_through_fare: Decimal | None
+) -> str:
+    tag = f"{int(itin.discount * 100)}% disc." if itin.discount > 0 else "no disc."
+    date_str = f"{itin.date} — {itin.return_date}" if itin.return_date else itin.date
+    price_note = " (round-trip)" if itin.return_date else ""
+
+    lines = [
+        f"\n<b>#{i}</b> <code>{itin.total:,.2f} {currency}</code>{price_note}",
+        f"  {date_str} | {origin} -> {itin.hub} ({esc(itin.hub_name)}) -> "
+        f"{itin.dest} ({esc(itin.dest_name)})",
+        f"  <i>Domestic leg:</i> {itin.dom_price:,.2f} {currency} ({tag}) -> "
+        f"{itin.dom_discounted:,.2f} {currency}",
+        f"  <i>Onward leg:</i> {itin.onward_price:,.2f} {currency}",
+    ]
+
+    if not itin.confirmed:
+        # STATUS_ESTIMATE or STATUS_PARTIAL: never quote a bookable fare here.
+        lines.append("  <i>Estimate only — not yet confirmed against a bookable fare.</i>")
+    else:
+        links = _booking_links(itin)
+        if links:
+            lines.append("  " + " | ".join(links))
+
+    if itin.requires_bag_recheck is True:
+        # None means "unknown" and must stay silent; only a confirmed "yes" warns.
+        lines.append("  Warning: this itinerary requires re-checking bags between tickets.")
+
+    lines.extend(_savings_lines(itin, origin, currency, fallback_through_fare))
+
+    return "\n".join(lines)
 
 
 def format_results(
-    routes: list[Route],
+    itineraries: list[Itinerary],
     origin: str,
     currency: str = "EUR",
+    *,
+    through_fare: Decimal | None = None,
 ) -> str:
     """Build Telegram-friendly HTML text with top results and summaries.
 
-    The returned string uses HTML tags (<b>, <i>, <code>) compatible with
-    python-telegram-bot's HTML parse mode.  No single line exceeds 4096 chars
-    so the caller can split safely on double-newlines if the total is too long.
+    ``through_fare`` is a fallback single-ticket baseline used only for an
+    itinerary that carries none of its own — an itinerary the engine priced
+    always carries its own, keyed to its exact destination and date, which
+    takes precedence.
+
+    The returned string uses HTML tags (<b>, <i>, <code>, <a>) compatible
+    with python-telegram-bot's HTML parse mode. No single line exceeds 4096
+    chars so the caller can split safely on double-newlines if the total is
+    too long.
     """
-    if not routes:
+    if not itineraries:
         return "<b>No routes found.</b>"
 
-    disc_pct = int(DOMESTIC_DISCOUNT * 100)
-    roundtrip = bool(routes[0].return_date)
+    roundtrip = bool(itineraries[0].return_date)
     trip_label = "Round-trip" if roundtrip else "One-way"
     parts: list[str] = []
 
     # ── Header ───────────────────────────────────────────────────────────
-    best = routes[0]
-    date_info = best.date
-    if roundtrip:
-        date_info = f"{best.date} — {best.return_date}"
+    best = itineraries[0]
+    date_info = f"{best.date} — {best.return_date}" if roundtrip else best.date
     parts.append(
-        f"<b>{trip_label} · Found {len(routes)} routes</b>\n"
-        f"Best: <b>{best.total:,.0f} {currency}</b> "
+        f"<b>{trip_label} · Found {len(itineraries)} routes</b>\n"
+        f"Best: <b>{best.total:,.2f} {currency}</b> "
         f"({origin}->{best.hub}->{best.dest} on {date_info})"
     )
 
     # ── Top 10 ───────────────────────────────────────────────────────────
-    top_n = min(10, len(routes))
+    top_n = min(10, len(itineraries))
     lines = [f"<b>Top {top_n} cheapest routes:</b>"]
-
-    for i, r in enumerate(routes[:top_n], 1):
-        tag = f"{disc_pct}% disc." if r.hub in DISCOUNT_AIRPORTS else "no disc."
-        date_str = f"{r.date} — {r.return_date}" if r.return_date else r.date
-        price_note = " (round-trip)" if r.return_date else ""
-        lines.append(
-            f"\n<b>#{i}</b> <code>{r.total:,.0f} {currency}</code>{price_note}\n"
-            f"  {date_str} | {origin} -> {r.hub} ({r.hub_name}) -> {r.dest} ({r.dest_name})\n"
-            f"  <i>Leg 1:</i> {r.dom_price} {currency} ({tag}) -> {r.dom_discounted:.0f} {currency}"
-            f" | {', '.join(r.dom_airlines)} | {_stops_label(r.dom_stops)} | {fmt_dur(r.dom_dur)}\n"
-            f"  <i>Leg 2:</i> {r.intl_price} {currency}"
-            f" | {', '.join(r.intl_airlines)} | {_stops_label(r.intl_stops)} | {fmt_dur(r.intl_dur)}"
-        )
+    for i, itin in enumerate(itineraries[:top_n], 1):
+        lines.append(_itinerary_block(i, itin, origin, currency, through_fare))
     parts.append("\n".join(lines))
 
-    # ── Best per hub (routes are sorted by total; first per hub = best) ─
+    # ── Best per hub (itineraries are sorted by total; first per hub = best) ─
     seen_hubs: set[str] = set()
     hub_lines: list[str] = []
-    for r in routes:
-        if r.hub not in seen_hubs:
-            seen_hubs.add(r.hub)
+    for itin in itineraries:
+        if itin.hub not in seen_hubs:
+            seen_hubs.add(itin.hub)
             hub_lines.append(
-                f"  {r.hub} ({r.hub_name}): <b>{r.total:,.0f} {currency}</b>"
-                f" on {r.date} -> {r.dest}"
+                f"  {itin.hub} ({esc(itin.hub_name)}): <b>{itin.total:,.2f} {currency}</b>"
+                f" on {itin.date} -> {itin.dest}"
             )
     if hub_lines:
         parts.append("<b>Best price per hub:</b>\n" + "\n".join(hub_lines))
 
-    # ── Best per date (routes sorted by total; first per date = best) ──
+    # ── Best per date (itineraries sorted by total; first per date = best) ──
     seen_dates: set[str] = set()
     date_lines: list[str] = []
-    for r in routes:
-        if r.date not in seen_dates:
-            seen_dates.add(r.date)
+    for itin in itineraries:
+        if itin.date not in seen_dates:
+            seen_dates.add(itin.date)
             date_lines.append(
-                f"  {r.date}: <b>{r.total:,.0f} {currency}</b>"
-                f" via {r.hub} -> {r.dest}"
+                f"  {itin.date}: <b>{itin.total:,.2f} {currency}</b>"
+                f" via {itin.hub} -> {itin.dest}"
             )
     if date_lines:
         parts.append("<b>Best price per date:</b>\n" + "\n".join(date_lines))
 
-    # ── Google Flights links (top 3) ─────────────────────────────────────
-    link_n = min(3, len(routes))
-    link_lines: list[str] = []
-    for i, r in enumerate(routes[:link_n], 1):
-        ret = r.return_date or None
-        url1 = build_url(origin, r.hub, r.date, currency=currency, return_date=ret)
-        url2 = build_url(r.hub, r.dest, r.date, currency=currency, return_date=ret)
-        date_str = f"{r.date} — {r.return_date}" if r.return_date else r.date
-        link_lines.append(
-            f"  #{i} {origin}->{r.hub}->{r.dest} {date_str}\n"
-            f"    <a href=\"{url1}\">Leg 1</a> | <a href=\"{url2}\">Leg 2</a>"
-        )
-    if link_lines:
-        parts.append("<b>Google Flights links:</b>\n" + "\n".join(link_lines))
-
     # ── Reminder ─────────────────────────────────────────────────────────
-    parts.append(
-        f"<i>Book legs separately to apply the {disc_pct}% Canary Islands"
-        " resident discount on Spanish domestic flights.</i>"
-    )
+    # The whole product exists to exploit this: a through-ticket never gets
+    # the domestic-leg discount, only two separately booked tickets do.
+    # Shown only when a displayed result actually carries one — no point
+    # reminding the user about a discount none of the shown routes qualify
+    # for, and the rate can differ per itinerary so no single percentage is
+    # quoted here.
+    if any(itin.discount > 0 for itin in itineraries[:top_n]):
+        parts.append(
+            "<i>Book each leg on its own, separate ticket — that is what lets the "
+            "discounted domestic leg above actually receive its discount. A single "
+            "through-fare ticket does not qualify for it.</i>"
+        )
 
     return "\n\n".join(parts)
