@@ -9,7 +9,7 @@ from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD
 from db import add_price_check, get_favorites, update_favorite_price
 from engine import run_search
 from models import SearchWindow
-from providers.registry import get_provider
+from providers.registry import get_provider, primary_provider
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,17 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
         # The query shape a favourite's price was quoted under has to be
         # replayed exactly, same reasoning as trip_days above — a provider
         # named at save time is resolved back to that same provider.
+        # No provider recorded means either this favourite predates Task
+        # 11's provider column, or it was tracked from a stored search that
+        # itself never got tagged. There is no query shape left to replay,
+        # so this deliberately falls back to the deployment's primary
+        # provider. That is an explicit decision made here, not an accident
+        # of passing provider=None through to run_search and letting its
+        # own default apply — the two happen to pick the same provider
+        # today, but for different reasons, and only one of them is a
+        # decision this module owns.
         provider_name = fav.get("provider")
-        provider = get_provider(provider_name) if provider_name else None
+        provider = get_provider(provider_name) if provider_name else primary_provider()
 
         try:
             result = await run_search(

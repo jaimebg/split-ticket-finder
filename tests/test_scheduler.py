@@ -160,7 +160,20 @@ async def test_favorite_provider_is_resolved_and_forwarded(temp_db, fake_engine,
     assert fake_engine["calls"][0]["provider"] is fake_provider
 
 
-async def test_favorite_without_a_stored_provider_lets_the_engine_pick(temp_db, fake_engine):
+async def test_favorite_without_a_stored_provider_falls_back_to_the_primary(
+    temp_db, fake_engine, monkeypatch
+):
+    """No recorded provider means there is no query shape to replay -- the
+    scheduler must fall back to the deployment's primary provider *itself*,
+    explicitly, rather than passing provider=None and relying on
+    run_search's own default. Both land on the same provider today, but for
+    different reasons: run_search's default is "no provider was given";
+    this is "no provider was recorded, so use the primary" -- a decision
+    that must be visible in scheduler.py, not an accident of a bare None
+    happening to fall through correctly."""
+    fake_primary = object()
+    monkeypatch.setattr(scheduler_module, "primary_provider", lambda: fake_primary)
+
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
         price=None, check_dates=["2026-09-01"], trip_days=0,
@@ -168,7 +181,7 @@ async def test_favorite_without_a_stored_provider_lets_the_engine_pick(temp_db, 
 
     await check_favorites(FakeBot(), owner_chat_id=1)
 
-    assert fake_engine["calls"][0]["provider"] is None
+    assert fake_engine["calls"][0]["provider"] is fake_primary
 
 
 # ── Alerting ─────────────────────────────────────────────────────────────────
