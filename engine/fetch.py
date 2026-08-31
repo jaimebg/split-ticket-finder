@@ -5,9 +5,13 @@ minutes; running them all at once gets a provider to block us. This caps
 in-flight requests and still spaces out each worker's own requests, so
 throughput scales with the cap while the request rate stays predictable.
 
-One broken leg must not abort a search of hundreds, so provider errors are
-counted and the leg is dropped. Cancellation is the one exception: it is a
-user decision, and it propagates.
+One broken leg must not abort a search of hundreds, so a per-leg
+``ProviderParseError``/``ProviderFetchError`` is counted and the leg is
+dropped. Cancellation and a bare ``ProviderError`` are the two exceptions:
+cancellation is a user decision, and a bare ``ProviderError`` means the
+provider cannot answer this *kind* of query at all, so every leg in the
+phase would fail the same way -- both propagate rather than being counted
+and swallowed (see ``LegFetcher._one``'s own comment).
 """
 from __future__ import annotations
 

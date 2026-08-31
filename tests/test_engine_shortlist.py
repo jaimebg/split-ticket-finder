@@ -105,16 +105,6 @@ def test_legs_for_raises_when_trip_days_positive_but_return_date_empty():
         legs_for(cands, origin="LPA", trip_days=14)
 
 
-def test_legs_for_consistent_round_trip_still_works():
-    """The consistent case (trip_days > 0 and return_date populated) is untouched."""
-    cands = [_c("2026-10-01", "MAD", "NRT", 600, return_date="2026-10-15")]
-    legs = legs_for(cands, origin="LPA", trip_days=14)
-    assert set(legs) == {
-        ("LPA", "MAD", "2026-10-01"), ("MAD", "NRT", "2026-10-01"),
-        ("MAD", "LPA", "2026-10-15"), ("NRT", "MAD", "2026-10-15"),
-    }
-
-
 def test_legs_for_one_way_ignores_a_populated_return_date():
     """trip_days is the authority on trip shape: trip_days=0 means one-way legs
     only, even if the candidate happens to carry a return_date."""

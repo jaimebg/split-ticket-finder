@@ -133,9 +133,11 @@ claim than one only the primary provider could confirm.
 - **Guided search** — a button-driven Telegram conversation collects
   destinations, trip type, dates and hubs, with a query-count estimate before
   anything is fetched.
-- **Flexible dates** — a fixed list, or a range sampled every N days.
-- **Ranked results** — cheapest itineraries with airlines, stops, durations,
-  per-hub and per-date bests, and deep links straight to each leg's booking page.
+- **Flexible dates** — type an explicit list, or build one from a start/end
+  range at a configurable step.
+- **Ranked results** — cheapest itineraries with per-hub and per-date bests,
+  savings against the airline's own through-fare, and deep links straight to
+  each leg's booking page.
 - **Price tracking** — save a route and a background scheduler re-prices it
   every few hours, alerting you when it drops more than 10% below its recorded
   best.

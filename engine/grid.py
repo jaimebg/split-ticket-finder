@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from engine.drill import _cheapest
+from engine.drill import cheapest
 from engine.fetch import LegFetcher
 from models import Itinerary, SearchWindow, add_days, generate_dates
 from providers.base import LegQuery, Offer
@@ -210,10 +210,10 @@ async def run_grid_search(
                 dest=dest,
                 dest_name=dest_names.get(dest, dest),
                 discount=rate,
-                dom_out=_cheapest(dom_out_offers),
-                dom_ret=_cheapest(dom_ret_offers) if dom_ret_offers else None,
-                onward_out=_cheapest(onward_out_offers),
-                onward_ret=_cheapest(onward_ret_offers) if onward_ret_offers else None,
+                dom_out=cheapest(dom_out_offers),
+                dom_ret=cheapest(dom_ret_offers) if dom_ret_offers else None,
+                onward_out=cheapest(onward_out_offers),
+                onward_ret=cheapest(onward_ret_offers) if onward_ret_offers else None,
             ))
 
     itineraries.sort(key=lambda itin: itin.total)

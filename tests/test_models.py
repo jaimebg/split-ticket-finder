@@ -202,7 +202,20 @@ def test_itinerary_from_candidate_estimate_still_uses_est_prices_after_the_fix()
 
 
 def test_itinerary_est_dom_price_of_zero_is_not_coalesced_away():
-    """A legitimately-zero estimate must read back as zero, not as unset."""
+    """A legitimately-zero estimate must read back as zero, not as unset.
+
+    Note (review Minor, fix-before-merge): this cannot actually distinguish
+    the current implementation (``x if x is not None else Decimal(0)``) from
+    the buggy one it guards against in name (``x or Decimal(0)``) -- the two
+    are value-equivalent for every Decimal, zero included, since
+    ``Decimal("0")`` is falsy. What this test does verify is that a real,
+    explicitly-set zero estimate is not itself treated as "unset" by whatever
+    coalescing is in place; it just cannot tell you which of the two
+    equivalent expressions implements that. Recording that limitation here so
+    it outlives this file, rather than being rediscovered the next time
+    someone "simplifies" the property to ``x or Decimal(0)`` and every test
+    still passes.
+    """
     it = Itinerary(
         date="2026-10-01", return_date="", hub="MAD", hub_name="Madrid",
         dest="NRT", dest_name="Tokyo", discount=Decimal("0.75"),

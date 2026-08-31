@@ -40,7 +40,7 @@ PHASE = "Phase 1"
 PHASE_THROUGH_FARE = "Phase 2"
 
 
-def _cheapest(offers: list[Offer]) -> Offer:
+def cheapest(offers: list[Offer]) -> Offer:
     """The cheapest of a leg's offers -- ``search_leg`` documents cheapest-first,
     but this is picked explicitly rather than trusting that ordering."""
     return min(offers, key=lambda o: o.price)
@@ -115,10 +115,10 @@ async def confirm(
             dest=cand.dest,
             dest_name=dest_names.get(cand.dest, cand.dest),
             discount=rate,
-            dom_out=_cheapest(dom_out_offers),
-            dom_ret=_cheapest(dom_ret_offers) if dom_ret_offers else None,
-            onward_out=_cheapest(onward_out_offers),
-            onward_ret=_cheapest(onward_ret_offers) if onward_ret_offers else None,
+            dom_out=cheapest(dom_out_offers),
+            dom_ret=cheapest(dom_ret_offers) if dom_ret_offers else None,
+            onward_out=cheapest(onward_out_offers),
+            onward_ret=cheapest(onward_ret_offers) if onward_ret_offers else None,
         ))
 
     itineraries.sort(key=lambda itin: itin.total)
@@ -139,7 +139,7 @@ def _cheapest_single_pnr(offers: list[Offer] | None) -> Offer | None:
     single_pnr = [o for o in offers if o.pnr_count == 1]
     if not single_pnr:
         return None
-    return _cheapest(single_pnr)
+    return cheapest(single_pnr)
 
 
 async def through_fares(
