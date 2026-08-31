@@ -56,6 +56,7 @@ def test_offer_defaults_unknown_fields_to_none():
     assert offer.booking_url is None
     assert offer.min_layover is None
     assert offer.pnr_count is None
+    assert offer.requires_bag_recheck is None
 
 
 def test_offer_price_is_decimal_not_float():

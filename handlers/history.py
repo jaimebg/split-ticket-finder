@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
@@ -10,37 +11,59 @@ from config import DEFAULT_HUBS, ORIGIN
 from db import get_search_by_id, get_searches
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
 from handlers.utils import esc, load_json_list, split_message
-from models import Route
+from models import Itinerary
 
 logger = logging.getLogger(__name__)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _route_from_dict(d: dict) -> Route:
-    """Reconstruct a Route from a stored dict.
+def _itinerary_from_dict(d: dict) -> Itinerary:
+    """Reconstruct an ``Itinerary`` from a stored result dict.
 
-    ``return_date`` matters beyond display: ``format_results`` uses it to decide
-    whether the stored prices are round-trip totals, so dropping it would render
-    a round-trip search as one-way with round-trip prices.
+    Handles both the shape ``search.itineraries_to_json`` now writes
+    (``discount``/``onward_price``/``through_fare``) and the pre-engine
+    ``Route`` shape it replaced (``dom_price``/``dom_discounted``/
+    ``intl_price``, no ``discount`` field at all) — the two rows in the live
+    ``flight_finder.db`` are this older shape, and must still load.
+
+    Neither shape carries a real ``Offer``, so a row reloaded from storage
+    always comes back unconfirmed (``est_dom_price``/``est_onward_price``
+    only): the numbers are a historical snapshot, not a fresh, bookable
+    quote, and ``format_results`` labels it an estimate accordingly.
+
+    ``return_date`` matters beyond display: ``format_results`` uses it to
+    decide whether the stored prices are round-trip totals, so dropping it
+    would render a round-trip search as one-way with round-trip prices.
     """
-    return Route(
+    dom_price = Decimal(str(d["dom_price"]))
+    onward_price = Decimal(str(d.get("onward_price", d.get("intl_price", 0))))
+
+    if "discount" in d:
+        discount = Decimal(str(d["discount"]))
+    elif dom_price:
+        # Old Route rows never stored the discount fraction directly, only
+        # both sides of it (dom_price, dom_discounted) — recover it from
+        # those so the stored total still reproduces exactly.
+        dom_discounted = Decimal(str(d.get("dom_discounted", dom_price)))
+        discount = Decimal(1) - dom_discounted / dom_price
+    else:
+        discount = Decimal(0)
+
+    through_fare_raw = d.get("through_fare")
+    through_fare = Decimal(str(through_fare_raw)) if through_fare_raw is not None else None
+
+    return Itinerary(
         date=d["date"],
+        return_date=d.get("return_date", ""),
         hub=d["hub"],
         hub_name=d.get("hub_name", d["hub"]),
         dest=d["dest"],
         dest_name=d.get("dest_name", d["dest"]),
-        dom_price=d["dom_price"],
-        dom_discounted=d["dom_discounted"],
-        intl_price=d["intl_price"],
-        total=d["total"],
-        return_date=d.get("return_date", ""),
-        dom_airlines=d.get("dom_airlines", []),
-        dom_stops=d.get("dom_stops", 0),
-        dom_dur=d.get("dom_dur", 0),
-        intl_airlines=d.get("intl_airlines", []),
-        intl_stops=d.get("intl_stops", 0),
-        intl_dur=d.get("intl_dur", 0),
+        discount=discount,
+        est_dom_price=dom_price,
+        est_onward_price=onward_price,
+        through_fare=through_fare,
     )
 
 
@@ -107,8 +130,13 @@ async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    routes = [_route_from_dict(d) for d in result_dicts]
-    text = format_results(routes, row.get("origin") or ORIGIN, row.get("currency") or "EUR")
+    itineraries = [_itinerary_from_dict(d) for d in result_dicts]
+    row_through_fare = row.get("through_fare")
+    through_fare = Decimal(str(row_through_fare)) if row_through_fare is not None else None
+    text = format_results(
+        itineraries, row.get("origin") or ORIGIN, row.get("currency") or "EUR",
+        through_fare=through_fare,
+    )
 
     chunks = split_message(text)
     await query.edit_message_text(chunks[0], parse_mode="HTML", disable_web_page_preview=True)

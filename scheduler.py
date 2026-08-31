@@ -5,30 +5,25 @@ import asyncio
 import json
 import logging
 
-from config import (
-    ALERT_INTERVAL_HOURS,
-    DEFAULT_DELAY,
-    DISCOUNT_AIRPORTS,
-    DOMESTIC_DISCOUNT,
-    PRICE_DROP_THRESHOLD,
-)
+from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD
 from db import add_price_check, get_favorites, update_favorite_price
-from models import add_days
-from providers.google import FetchError, ParseError, search
+from engine import run_search
+from models import SearchWindow
+from providers.registry import get_provider, primary_provider
 
 logger = logging.getLogger(__name__)
 
 
-def _sample_dates(dates: list[str], max_n: int = 5) -> list[str]:
-    """Return up to *max_n* evenly-spaced dates from the list."""
-    if len(dates) <= max_n:
-        return list(dates)
-    step = len(dates) / max_n
-    return [dates[int(i * step)] for i in range(max_n)]
-
-
 async def check_favorites(bot, owner_chat_id: int) -> None:
-    """Iterate all favorites and check current prices against records."""
+    """Iterate all favorites and check current prices against records.
+
+    Pricing is entirely the engine's job: this calls ``engine.run_search``
+    with the favourite's own (single) hub and destination and reads the
+    total off whichever itinerary comes back cheapest. It must never
+    recompute ``dom_price * (1 - discount) + onward_price`` itself — two
+    implementations of that one formula is exactly the shape of the
+    round-trip bug fixed in e83a4d3.
+    """
     favorites = await get_favorites()
     if not favorites:
         logger.info("No favorites to check.")
@@ -43,7 +38,12 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
         currency = fav["currency"]
         record_price = fav["record_price"]
 
-        # Parse check_dates from JSON string
+        # A favourite saved from a round-trip search has a record price
+        # covering all four legs. Re-pricing it as one-way would halve the
+        # total and read as a price drop on every single cycle, so the trip
+        # shape has to be replayed exactly as it was quoted.
+        trip_days = fav.get("trip_days") or 0
+
         try:
             all_dates = json.loads(fav["check_dates"])
         except (json.JSONDecodeError, TypeError):
@@ -54,67 +54,76 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
             logger.warning("Favorite %d has no check_dates, skipping.", fav_id)
             continue
 
-        # A favourite saved from a round-trip search has a record price covering
-        # all four legs. Re-pricing it as one-way would halve the total and read
-        # as a price drop on every single cycle, so the trip shape has to be
-        # replayed exactly as it was quoted.
-        trip_days = fav.get("trip_days") or 0
-        roundtrip = trip_days > 0
+        # The full tracked range, not a sample of it (review finding I5): the
+        # old `_sample_dates(all_dates, max_n=5)` picked five evenly-spaced
+        # indices that never included the last one, so a favourite tracked
+        # over e.g. 2026-09-01..2026-11-30 had its final ~18 days never
+        # re-priced -- a genuine drop there was undetectable, contradicting
+        # handlers/favorites.py's own "Track every date the search covered".
+        # That sampling saved requests only under the old grid engine, where
+        # date coverage cost real queries; a price-calendar provider prices
+        # the whole window for one request regardless of how wide it is, so
+        # there is nothing left to save by sampling.
+        window = SearchWindow(start=min(all_dates), end=max(all_dates))
 
-        sampled = _sample_dates(all_dates, max_n=5)
-        best_price: float | None = None
-        best_detail: dict | None = None
+        # The query shape a favourite's price was quoted under has to be
+        # replayed exactly, same reasoning as trip_days above — a provider
+        # named at save time is resolved back to that same provider.
+        # No provider recorded means either this favourite predates Task
+        # 11's provider column, or it was tracked from a stored search that
+        # itself never got tagged. There is no query shape left to replay,
+        # so this deliberately falls back to the deployment's primary
+        # provider. That is an explicit decision made here, not an accident
+        # of passing provider=None through to run_search and letting its
+        # own default apply — the two happen to pick the same provider
+        # today, but for different reasons, and only one of them is a
+        # decision this module owns.
+        provider_name = fav.get("provider")
+        provider = get_provider(provider_name) if provider_name else primary_provider()
 
-        for date in sampled:
-            try:
-                legs = [(origin, hub, date), (hub, destination, date)]
-                if roundtrip:
-                    ret_date = add_days(date, trip_days)
-                    legs += [(destination, hub, ret_date), (hub, origin, ret_date)]
-
-                prices = []
-                for from_apt, to_apt, leg_date in legs:
-                    results = await search(from_apt, to_apt, leg_date, adults, currency)
-                    await asyncio.sleep(DEFAULT_DELAY)
-                    if not results:
-                        break
-                    prices.append(results[0].price)
-
-                # Any missing leg makes the itinerary unbookable — skip the date.
-                if len(prices) != len(legs):
-                    continue
-
-                # Domestic legs are the origin<->hub ones: first, and last when
-                # this is a round trip.
-                dom_price = prices[0] + (prices[3] if roundtrip else 0)
-                intl_price = prices[1] + (prices[2] if roundtrip else 0)
-
-                discount = DOMESTIC_DISCOUNT if hub in DISCOUNT_AIRPORTS else 0.0
-                total = dom_price * (1 - discount) + intl_price
-
-                if best_price is None or total < best_price:
-                    best_price = total
-                    best_detail = {
-                        "hub": hub,
-                        "dest": destination,
-                        "date": date,
-                        "return_date": add_days(date, trip_days) if roundtrip else "",
-                        "trip_days": trip_days,
-                        "dom_price": dom_price,
-                        "intl_price": intl_price,
-                    }
-
-            except (FetchError, ParseError) as exc:
-                logger.warning("Favorite %d on %s: %s", fav_id, date, exc)
-            except Exception:
-                logger.exception(
-                    "Error checking favorite %d on date %s", fav_id, date
-                )
-
-        # After all dates checked for this favorite
-        if best_price is None:
-            logger.info("Favorite %d: no flights found in sampled dates.", fav_id)
+        try:
+            result = await run_search(
+                origin=origin,
+                destinations={destination: destination},
+                hubs={hub: hub},
+                window=window,
+                trip_days=trip_days,
+                adults=adults,
+                currency=currency,
+                provider=provider,
+            )
+        except Exception:
+            logger.exception("Error checking favorite %d", fav_id)
             continue
+
+        itineraries = result.itineraries
+        if not itineraries:
+            # Empty and broken must not be logged alike (review finding C2):
+            # a provider erroring on every request also returns an empty
+            # itinerary list here, and without this check that reads in the
+            # logs exactly like a route that was genuinely searched and
+            # came back empty.
+            if result.parse_errors or result.fetch_errors:
+                logger.warning(
+                    "Favorite %d: %d parse and %d fetch failures — could not "
+                    "fully check this route, not necessarily no flights.",
+                    fav_id, result.parse_errors, result.fetch_errors,
+                )
+            else:
+                logger.info("Favorite %d: no flights found in tracked dates.", fav_id)
+            continue
+
+        best = min(itineraries, key=lambda itin: itin.total)
+        best_price = float(best.total)
+        best_detail = {
+            "hub": best.hub,
+            "dest": best.dest,
+            "date": best.date,
+            "return_date": best.return_date,
+            "trip_days": trip_days,
+            "dom_price": float(best.dom_price),
+            "onward_price": float(best.onward_price),
+        }
 
         # Save price check record
         await add_price_check(fav_id, best_price, best_detail)
@@ -128,8 +137,8 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
             alert_msg = (
                 f"Price drop alert! "
                 f"{origin}->{hub}->{destination}: "
-                f"{best_price:.0f} {currency} "
-                f"(was {record_price:.0f})"
+                f"{best_price:.2f} {currency} "
+                f"(was {record_price:.2f})"
             )
             try:
                 await bot.send_message(chat_id=owner_chat_id, text=alert_msg)
@@ -137,14 +146,14 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
                 logger.exception("Failed to send price drop alert for favorite %d", fav_id)
             await update_favorite_price(fav_id, best_price, is_record=True)
             logger.info(
-                "Favorite %d: price drop! %.0f -> %.0f %s",
+                "Favorite %d: price drop! %.2f -> %.2f %s",
                 fav_id, record_price, best_price, currency,
             )
         else:
             # No significant drop — just update last price
             await update_favorite_price(fav_id, best_price, is_record=False)
             logger.info(
-                "Favorite %d: checked, best=%.0f %s (record=%s)",
+                "Favorite %d: checked, best=%.2f %s (record=%s)",
                 fav_id, best_price, currency, record_price,
             )
 

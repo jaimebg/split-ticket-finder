@@ -109,6 +109,13 @@ async def save_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         price=best.get("total"),
         check_dates=check_dates,
         trip_days=trip_days,
+        # The provider that actually priced this search, so the scheduler can
+        # replay the exact same query shape rather than comparing two
+        # different things (spec: see scheduler.py's own comment, and the
+        # round-trip regression fixed in e83a4d3). A search saved before
+        # Task 11's migration has no recorded provider -- row.get returns
+        # None, which is forwarded as-is rather than guessed at.
+        provider=row.get("provider"),
     )
 
     trip_str = f"round-trip, {trip_days} days" if trip_days else "one-way"

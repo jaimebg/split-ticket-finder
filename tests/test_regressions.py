@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
 import db as db_module
-from handlers.history import _route_from_dict
+from handlers.history import _itinerary_from_dict
 from handlers.utils import ValidationError, esc, parse_date, parse_date_list, split_message
-from models import Route, generate_dates
-from search import format_results, routes_to_json
+from models import Itinerary, generate_dates
+from search import format_results, itineraries_to_json
 
 
 def _days_from_now(days: int) -> str:
@@ -22,18 +23,17 @@ def _days_from_now(days: int) -> str:
     return (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
-def _round_trip_route() -> Route:
-    return Route(
+def _round_trip_itinerary() -> Itinerary:
+    return Itinerary(
         date="2026-09-01",
+        return_date="2026-09-15",
         hub="MAD",
         hub_name="Madrid",
         dest="NRT",
         dest_name="NRT",
-        dom_price=100,
-        dom_discounted=25.0,
-        intl_price=400,
-        total=425.0,
-        return_date="2026-09-15",
+        discount=Decimal("0.75"),
+        est_dom_price=Decimal("100"),
+        est_onward_price=Decimal("400"),
     )
 
 
@@ -77,21 +77,65 @@ def test_date_list_is_deduplicated_and_sorted():
 
 
 def test_stored_round_trip_survives_the_json_round_trip():
-    stored = json.loads(routes_to_json([_round_trip_route()]))[0]
+    stored = json.loads(itineraries_to_json([_round_trip_itinerary()]))[0]
     assert stored["return_date"] == "2026-09-15"
 
-    restored = _route_from_dict(stored)
+    restored = _itinerary_from_dict(stored)
     assert restored.return_date == "2026-09-15", "return_date must survive storage"
 
 
 def test_stored_round_trip_still_renders_as_round_trip():
-    stored = json.loads(routes_to_json([_round_trip_route()]))[0]
-    rendered = format_results([_route_from_dict(stored)], "LPA")
+    stored = json.loads(itineraries_to_json([_round_trip_itinerary()]))[0]
+    rendered = format_results([_itinerary_from_dict(stored)], "LPA")
 
     assert "Round-trip" in rendered
     assert "One-way" not in rendered
     # Both legs of the date range must show, not just the outbound.
     assert "2026-09-01 — 2026-09-15" in rendered
+
+
+# ── Task 12: legacy Route-shaped rows must still load and render ────────────
+
+
+def test_legacy_route_shaped_row_loads_without_crashing():
+    """The two real rows in flight_finder.db predate the engine and have no
+    ``discount``/``onward_price`` keys at all -- only the old Route field
+    names (dom_price, dom_discounted, intl_price, total, hub_name, ...).
+    This is a hand-written fixture matching that exact shape (taken from the
+    live db's stored ``results`` blob), not the current itineraries_to_json
+    output.
+    """
+    legacy_row = {
+        "date": "2026-03-04",
+        "hub": "BCN",
+        "hub_name": "Barcelona",
+        "dest": "JFK",
+        "dest_name": "JFK",
+        "dom_price": 82,
+        "dom_discounted": 12.3,
+        "intl_price": 268,
+        "total": 280.3,
+        "dom_airlines": ["Vueling"],
+        "intl_airlines": ["LEVEL"],
+        "dom_stops": 0,
+        "dom_dur": 200,
+        "intl_stops": 0,
+        "intl_dur": 565,
+        # No "return_date" key at all -- this row predates round-trip search.
+    }
+
+    itin = _itinerary_from_dict(legacy_row)
+
+    assert itin.confirmed is False
+    assert itin.status != "confirmed"
+    assert itin.hub == "BCN"
+    assert itin.dest == "JFK"
+    assert itin.return_date == ""
+    assert float(itin.total) == pytest.approx(280.30)
+
+    rendered = format_results([itin], "LPA")
+    assert "Estimate only" in rendered
+    assert "href=" not in rendered
 
 
 # ── Bug 3: trip_days was not persisted, causing false price-drop alerts ─────
@@ -179,10 +223,30 @@ async def test_init_db_is_idempotent(temp_db):
         ("<b>bold", "&lt;b&gt;bold"),
         ("a & b", "a &amp; b"),
         ("MAD", "MAD"),
+        ('say "hi"', "say &quot;hi&quot;"),
+        ("it's here", "it&#x27;s here"),
     ],
 )
 def test_user_input_is_escaped_for_html(raw, expected):
     assert esc(raw) == expected
+
+
+def test_esc_escapes_quotes_so_it_is_safe_inside_an_html_attribute():
+    """esc() must be safe in a quoted attribute value, not just text content --
+    search.py interpolates provider-supplied booking URLs into href="...".
+    An unescaped '"' would let that text break out of the attribute."""
+    assert '"' not in esc('say "hi"')
+    assert "'" not in esc("it's here")
+
+
+def test_booking_url_with_an_embedded_quote_cannot_escape_its_href_attribute():
+    """A malicious or malformed booking URL from a third-party provider (Kiwi)
+    must not be able to inject an attribute onto the <a> tag it's rendered
+    into -- the exact vector this regression closes."""
+    malicious_url = 'https://kiwi.com/x?a=1" onmouseover="alert(1)'
+    rendered = f'<a href="{esc(malicious_url)}">Book</a>'
+    assert 'onmouseover="alert' not in rendered
+    assert "&quot;" in rendered
 
 
 # ── Message splitting ───────────────────────────────────────────────────────

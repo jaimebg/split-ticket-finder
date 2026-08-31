@@ -1,12 +1,23 @@
-"""Tests for the price-tracking scheduler."""
+"""Tests for the price-tracking scheduler.
+
+Task 12 rewired ``check_favorites`` to price favourites through
+``engine.run_search`` instead of querying legs and computing
+``dom_price * (1 - discount) + onward_price`` itself -- two implementations
+of one formula was exactly the shape of the round-trip bug fixed in
+e83a4d3. These tests fake the engine call, not the provider layer.
+"""
 from __future__ import annotations
+
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
 import db as db_module
 import scheduler as scheduler_module
-from providers.google import FlightResult
-from scheduler import _sample_dates, check_favorites
+from models import Itinerary
+from providers.base import Offer
+from scheduler import check_favorites
 
 
 class FakeBot:
@@ -19,101 +30,173 @@ class FakeBot:
         self.messages.append(text)
 
 
+def _offer(price: str) -> Offer:
+    return Offer(price=Decimal(price), currency="EUR", airlines=["Iberia"],
+                 stops=0, duration=120, segments=[], provider="fake")
+
+
+def _itin(
+    *, hub="MAD", dest="NRT", date="2026-09-01", return_date="",
+    discount="0.5", dom_price="100", onward_price="500",
+) -> Itinerary:
+    """A confirmed itinerary with an arbitrary, engine-chosen discount.
+
+    The discount (0.5) deliberately disagrees with config's own
+    DOMESTIC_DISCOUNT (0.75): if the scheduler recomputed the total itself
+    using config's rate, it would land on a different number than the one
+    this itinerary's own ``.total`` reports.
+    """
+    return Itinerary(
+        date=date, return_date=return_date, hub=hub, hub_name=hub, dest=dest,
+        dest_name=dest, discount=Decimal(discount),
+        dom_out=_offer(dom_price), onward_out=_offer(onward_price),
+    )
+
+
 @pytest.fixture
-def fake_prices(monkeypatch):
-    """Stub the scraper with a {(from, to): price} table and record queries."""
-    prices: dict[tuple[str, str], int] = {}
-    calls: list[tuple[str, str, str]] = []
+def fake_engine(monkeypatch):
+    """Replace scheduler.run_search with a scripted, capture-everything fake."""
+    calls: list[dict] = []
+    state = {"itineraries": [_itin()], "parse_errors": 0, "fetch_errors": 0}
 
-    async def fake_search(from_apt, to_apt, date, adults=1, currency="EUR", **kwargs):
-        calls.append((from_apt, to_apt, date))
-        price = prices.get((from_apt, to_apt))
-        if price is None:
-            return []
-        return [FlightResult(price=price, airlines=["Iberia"], stops=0, duration=120)]
+    async def fake_run_search(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            itineraries=state["itineraries"],
+            parse_errors=state["parse_errors"],
+            fetch_errors=state["fetch_errors"],
+        )
 
-    monkeypatch.setattr(scheduler_module, "search", fake_search)
-    monkeypatch.setattr(scheduler_module, "DEFAULT_DELAY", 0)
-    monkeypatch.setattr(scheduler_module, "DISCOUNT_AIRPORTS", set())
-    return {"prices": prices, "calls": calls}
-
-
-# ── Date sampling ───────────────────────────────────────────────────────────
+    monkeypatch.setattr(scheduler_module, "run_search", fake_run_search)
+    return {"calls": calls, "state": state}
 
 
-def test_sample_dates_returns_all_when_under_the_cap():
-    dates = ["2026-09-01", "2026-09-02"]
-    assert _sample_dates(dates, max_n=5) == dates
+# ── Task 12 requirement: the scheduler must not recompute a discount ────────
 
 
-def test_sample_dates_spreads_across_the_range():
-    dates = [f"2026-09-{d:02d}" for d in range(1, 21)]
-    sampled = _sample_dates(dates, max_n=5)
-
-    assert len(sampled) == 5
-    assert sampled[0] == "2026-09-01"
-    assert all(d in dates for d in sampled)
-    assert sampled == sorted(sampled)
+def test_scheduler_module_no_longer_imports_discount_config():
+    """The discount formula now lives in exactly one place -- the engine.
+    Two implementations of it is the shape of the bug fixed in e83a4d3."""
+    assert not hasattr(scheduler_module, "DISCOUNT_AIRPORTS")
+    assert not hasattr(scheduler_module, "DOMESTIC_DISCOUNT")
 
 
-def test_sample_dates_handles_empty_input():
-    assert _sample_dates([], max_n=5) == []
-
-
-# ── The false price-drop alert ──────────────────────────────────────────────
-
-
-async def test_round_trip_favorite_is_repriced_as_round_trip(temp_db, fake_prices):
-    """The regression: re-pricing a round-trip favourite as one-way halved the
-    total and fired a price-drop alert on every cycle."""
-    fake_prices["prices"].update({
-        ("LPA", "MAD"): 100,   # outbound domestic
-        ("MAD", "NRT"): 500,   # outbound international
-        ("NRT", "MAD"): 520,   # return international
-        ("MAD", "LPA"): 110,   # return domestic
-    })
-    record_price = 100 + 500 + 520 + 110  # 1230, what the user was quoted
+async def test_check_favorites_uses_the_engines_total_verbatim(temp_db, fake_engine):
+    """dom_price=100 * (1 - 0.5) + onward_price=500 = 550 -- if the scheduler
+    recomputed using config's DOMESTIC_DISCOUNT (0.75) it would record 525
+    instead. Only 550 (the engine's own total) proves no local recompute."""
+    fake_engine["state"]["itineraries"] = [
+        _itin(discount="0.5", dom_price="100", onward_price="500")
+    ]
 
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
-        price=float(record_price), check_dates=["2026-09-01"], trip_days=14,
+        price=None, check_dates=["2026-09-01"], trip_days=0,
     )
 
-    bot = FakeBot()
-    await check_favorites(bot, owner_chat_id=1)
-
-    assert bot.messages == [], f"unexpected price-drop alert: {bot.messages}"
-
-    # All four legs must have been queried, the return ones on the return date.
-    calls = fake_prices["calls"]
-    assert ("MAD", "LPA", "2026-09-15") in calls
-    assert ("NRT", "MAD", "2026-09-15") in calls
+    await check_favorites(FakeBot(), owner_chat_id=1)
 
     fav = (await db_module.get_favorites())[0]
-    assert fav["last_price"] == pytest.approx(float(record_price))
-    assert fav["record_price"] == pytest.approx(float(record_price))
+    assert fav["last_price"] == pytest.approx(550.0)
 
 
-async def test_one_way_favorite_queries_only_outbound_legs(temp_db, fake_prices):
-    fake_prices["prices"].update({("LPA", "MAD"): 100, ("MAD", "NRT"): 500})
+async def test_round_trip_favorite_forwards_trip_days_to_the_engine(temp_db, fake_engine):
+    """Regression guard for e83a4d3: a round-trip favourite must be replayed
+    as round-trip, not one-way. The engine owns the actual round-trip
+    pricing now (tested exhaustively in tests/test_engine_drill.py); the
+    scheduler's own job is just to forward trip_days unchanged."""
+    fake_engine["state"]["itineraries"] = [_itin(return_date="2026-09-15")]
 
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=1230.0, check_dates=["2026-09-01"], trip_days=14,
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    assert fake_engine["calls"][0]["trip_days"] == 14
+
+
+async def test_one_way_favorite_forwards_trip_days_zero(temp_db, fake_engine):
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
         price=600.0, check_dates=["2026-09-01"], trip_days=0,
     )
 
-    bot = FakeBot()
-    await check_favorites(bot, owner_chat_id=1)
+    await check_favorites(FakeBot(), owner_chat_id=1)
 
-    assert bot.messages == []
-    assert fake_prices["calls"] == [
-        ("LPA", "MAD", "2026-09-01"),
-        ("MAD", "NRT", "2026-09-01"),
+    assert fake_engine["calls"][0]["trip_days"] == 0
+
+
+async def test_favorite_provider_is_resolved_and_forwarded(temp_db, fake_engine, monkeypatch):
+    fake_provider = object()
+    monkeypatch.setattr(scheduler_module, "get_provider", lambda name: fake_provider)
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=["2026-09-01"], trip_days=0, provider="kiwi",
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    assert fake_engine["calls"][0]["provider"] is fake_provider
+
+
+async def test_check_favorites_uses_the_full_tracked_range_as_the_window(
+    temp_db, fake_engine,
+):
+    """Regression guard for review finding I5: the old
+    ``_sample_dates(all_dates, max_n=5)`` picked five evenly-spaced indices
+    that never included the last one, so the window built from that sample
+    silently excluded the tail of a long tracked range -- contradicting
+    handlers/favorites.py's own "Track every date the search covered". A
+    favourite tracked over 20 dates must search a window covering all of
+    them, end included."""
+    dates = [f"2026-09-{d:02d}" for d in range(1, 21)]  # 20 dates
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=dates, trip_days=0,
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    window = fake_engine["calls"][0]["window"]
+    assert window.start == "2026-09-01"
+    assert window.end == "2026-09-20"  # the last date -- never reached pre-fix
+
+
+async def test_favorite_without_a_stored_provider_falls_back_to_the_primary(
+    temp_db, fake_engine, monkeypatch
+):
+    """No recorded provider means there is no query shape to replay -- the
+    scheduler must fall back to the deployment's primary provider *itself*,
+    explicitly, rather than passing provider=None and relying on
+    run_search's own default. Both land on the same provider today, but for
+    different reasons: run_search's default is "no provider was given";
+    this is "no provider was recorded, so use the primary" -- a decision
+    that must be visible in scheduler.py, not an accident of a bare None
+    happening to fall through correctly."""
+    fake_primary = object()
+    monkeypatch.setattr(scheduler_module, "primary_provider", lambda: fake_primary)
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=["2026-09-01"], trip_days=0,
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    assert fake_engine["calls"][0]["provider"] is fake_primary
+
+
+# ── Alerting ─────────────────────────────────────────────────────────────────
+
+
+async def test_genuine_price_drop_alerts_and_updates_the_record(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [
+        _itin(discount="0", dom_price="50", onward_price="300")  # total 350
     ]
-
-
-async def test_genuine_price_drop_alerts_and_updates_the_record(temp_db, fake_prices):
-    fake_prices["prices"].update({("LPA", "MAD"): 50, ("MAD", "NRT"): 300})
 
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
@@ -131,9 +214,11 @@ async def test_genuine_price_drop_alerts_and_updates_the_record(temp_db, fake_pr
     assert fav["record_price"] == pytest.approx(350.0)
 
 
-async def test_small_price_change_does_not_alert(temp_db, fake_prices):
+async def test_small_price_change_does_not_alert(temp_db, fake_engine):
     """Below the 10% threshold, the record stands and no alert is sent."""
-    fake_prices["prices"].update({("LPA", "MAD"): 100, ("MAD", "NRT"): 480})
+    fake_engine["state"]["itineraries"] = [
+        _itin(discount="0", dom_price="100", onward_price="480")  # total 580
+    ]
 
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
@@ -149,9 +234,10 @@ async def test_small_price_change_does_not_alert(temp_db, fake_prices):
     assert fav["last_price"] == pytest.approx(580.0)     # but last price recorded
 
 
-async def test_incomplete_itinerary_is_skipped(temp_db, fake_prices):
-    """A missing leg makes the trip unbookable, so it must not produce a price."""
-    fake_prices["prices"].update({("LPA", "MAD"): 100})  # no onward flight
+async def test_no_itineraries_found_is_skipped(temp_db, fake_engine):
+    """The engine found nothing bookable for this favourite -- must not
+    overwrite last_price with anything, and must not crash."""
+    fake_engine["state"]["itineraries"] = []
 
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
@@ -166,28 +252,75 @@ async def test_incomplete_itinerary_is_skipped(temp_db, fake_prices):
     assert fav["last_price"] == pytest.approx(600.0)  # untouched
 
 
-async def test_discount_is_applied_to_the_qualifying_hub(temp_db, fake_prices, monkeypatch):
-    monkeypatch.setattr(scheduler_module, "DISCOUNT_AIRPORTS", {"MAD"})
-    monkeypatch.setattr(scheduler_module, "DOMESTIC_DISCOUNT", 0.75)
-    fake_prices["prices"].update({("LPA", "MAD"): 100, ("MAD", "NRT"): 500})
+async def test_provider_errors_are_logged_distinctly_from_a_genuine_empty_result(
+    temp_db, fake_engine, caplog,
+):
+    """Review finding C2: a provider that failed on every request also
+    returns an empty itinerary list -- the log must say so distinctly from a
+    route that was genuinely searched and came back with nothing (this
+    project's central empty-vs-broken rule)."""
+    fake_engine["state"]["itineraries"] = []
+    fake_engine["state"]["parse_errors"] = 3
+    fake_engine["state"]["fetch_errors"] = 2
 
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
-        price=None, check_dates=["2026-09-01"], trip_days=0,
+        price=600.0, check_dates=["2026-09-01"], trip_days=0,
     )
 
-    await check_favorites(FakeBot(), owner_chat_id=1)
+    with caplog.at_level("INFO"):
+        await check_favorites(FakeBot(), owner_chat_id=1)
 
-    fav = (await db_module.get_favorites())[0]
-    # 100 * (1 - 0.75) + 500 = 525
-    assert fav["last_price"] == pytest.approx(525.0)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("could not fully check" in m for m in messages)
+    assert not any("no flights found" in m for m in messages)
 
 
-async def test_favorite_with_no_dates_is_skipped(temp_db, fake_prices):
+async def test_a_clean_empty_result_still_logs_as_no_flights_found(
+    temp_db, fake_engine, caplog,
+):
+    """The counterpart to the test above: no errors at all must still say
+    "no flights found" plainly, not grow a spurious incompleteness caveat."""
+    fake_engine["state"]["itineraries"] = []
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=600.0, check_dates=["2026-09-01"], trip_days=0,
+    )
+
+    with caplog.at_level("INFO"):
+        await check_favorites(FakeBot(), owner_chat_id=1)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no flights found" in m for m in messages)
+    assert not any("could not fully check" in m for m in messages)
+
+
+async def test_favorite_with_no_dates_is_skipped(temp_db, fake_engine):
     await db_module.add_favorite(
         origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
         price=600.0, check_dates=[], trip_days=0,
     )
 
     await check_favorites(FakeBot(), owner_chat_id=1)
-    assert fake_prices["calls"] == []
+
+    assert fake_engine["calls"] == []
+
+
+async def test_engine_error_is_logged_and_does_not_abort_other_favorites(temp_db, monkeypatch):
+    async def failing_run_search(**kwargs):
+        raise RuntimeError("provider is down")
+
+    monkeypatch.setattr(scheduler_module, "run_search", failing_run_search)
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=600.0, check_dates=["2026-09-01"], trip_days=0,
+    )
+
+    bot = FakeBot()
+    await check_favorites(bot, owner_chat_id=1)  # must not raise
+
+    assert bot.messages == []
+    fav = (await db_module.get_favorites())[0]
+    assert fav["last_price"] == pytest.approx(600.0)  # untouched

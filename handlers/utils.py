@@ -44,13 +44,21 @@ def split_message(text: str, limit: int = TELEGRAM_LIMIT) -> list[str]:
 
 
 def esc(value: object) -> str:
-    """Escape *value* for Telegram's HTML parse mode.
+    """Escape *value* for Telegram's HTML parse mode -- safe in both text
+    content and quoted attribute values (e.g. an href).
 
-    Every piece of user- or Google-supplied text interpolated into a message
-    must go through this: an unescaped "<" makes Telegram reject the whole
-    message as malformed HTML.
+    Every piece of user- or provider-supplied text interpolated into a
+    message or attribute must go through this: an unescaped "<" makes
+    Telegram reject the whole message as malformed HTML, and an unescaped
+    '"' inside an attribute -- a booking URL from a third-party provider,
+    say -- can break out of it entirely and inject a new one. Quotes are
+    escaped unconditionally rather than only in an "attribute" variant of
+    this function: escaping them in text content is harmless (Telegram
+    parses the entities back to literal characters), so one function that
+    is always safe beats two where picking the wrong one silently reopens
+    the same hole.
     """
-    return html.escape(str(value), quote=False)
+    return html.escape(str(value), quote=True)
 
 
 # ── Input validation ────────────────────────────────────────────────────────

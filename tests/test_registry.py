@@ -135,3 +135,71 @@ def test_validate_accepts_a_consistent_provider_config(monkeypatch):
     monkeypatch.setattr(config, "PROVIDERS", ("kiwi", "google"))
     monkeypatch.setattr(config, "PRIMARY_PROVIDER", "kiwi")
     config.validate()
+
+
+# ── Engine tuning knobs (Task 13) ────────────────────────────────────────────
+
+
+def test_engine_knobs_have_the_documented_defaults():
+    """Pins the defaults the spec's cost model (§5.8) was verified against --
+    changing one silently would change the request-count story the README
+    tells without anyone deciding to."""
+    assert config.SHORTLIST_SIZE == 30
+    assert config.MAX_PER_HUB == 6
+    assert config.MAX_PER_DATE == 4
+    assert config.THROUGH_FARE_DATES == 3
+    assert config.FALLBACK_MAX_DATES == 12
+    assert config.MAX_WINDOW_DAYS == 91
+
+
+def test_engine_knobs_are_overridable_via_env(monkeypatch):
+    monkeypatch.setenv("SHORTLIST_SIZE", "50")
+    monkeypatch.setenv("MAX_PER_HUB", "10")
+    monkeypatch.setenv("MAX_PER_DATE", "8")
+    monkeypatch.setenv("THROUGH_FARE_DATES", "5")
+    monkeypatch.setenv("FALLBACK_MAX_DATES", "20")
+    monkeypatch.setenv("MAX_WINDOW_DAYS", "60")
+
+    assert config._int_env("SHORTLIST_SIZE", 30, lo=1) == 50
+    assert config._int_env("MAX_PER_HUB", 6, lo=1) == 10
+    assert config._int_env("MAX_PER_DATE", 4, lo=1) == 8
+    assert config._int_env("THROUGH_FARE_DATES", 3, lo=1) == 5
+    assert config._int_env("FALLBACK_MAX_DATES", 12, lo=1) == 20
+    assert config._int_env("MAX_WINDOW_DAYS", 91, lo=1) == 60
+
+
+def test_engine_knobs_reject_a_non_integer(monkeypatch):
+    monkeypatch.setenv("SHORTLIST_SIZE", "thirty")
+    with pytest.raises(config.ConfigError, match="SHORTLIST_SIZE"):
+        config._int_env("SHORTLIST_SIZE", 30, lo=1)
+
+
+def test_validate_rejects_a_max_per_hub_larger_than_the_shortlist(monkeypatch):
+    """A cap bigger than the shortlist it filters never actually triggers --
+    it reads as a broken filter, not a harmless no-op, so validate() must
+    catch it."""
+    monkeypatch.setattr(config, "BOT_TOKEN", "token")
+    monkeypatch.setattr(config, "OWNER_ID", 1)
+    monkeypatch.setattr(config, "SHORTLIST_SIZE", 10)
+    monkeypatch.setattr(config, "MAX_PER_HUB", 20)
+    with pytest.raises(config.ConfigError, match="MAX_PER_HUB"):
+        config.validate()
+
+
+def test_validate_rejects_a_max_per_date_larger_than_the_shortlist(monkeypatch):
+    monkeypatch.setattr(config, "BOT_TOKEN", "token")
+    monkeypatch.setattr(config, "OWNER_ID", 1)
+    monkeypatch.setattr(config, "SHORTLIST_SIZE", 10)
+    monkeypatch.setattr(config, "MAX_PER_DATE", 20)
+    with pytest.raises(config.ConfigError, match="MAX_PER_DATE"):
+        config.validate()
+
+
+def test_validate_accepts_caps_equal_to_the_shortlist(monkeypatch):
+    """"At most" means equal is fine -- only strictly greater is a no-op."""
+    monkeypatch.setattr(config, "BOT_TOKEN", "token")
+    monkeypatch.setattr(config, "OWNER_ID", 1)
+    monkeypatch.setattr(config, "SHORTLIST_SIZE", 10)
+    monkeypatch.setattr(config, "MAX_PER_HUB", 10)
+    monkeypatch.setattr(config, "MAX_PER_DATE", 10)
+    config.validate()

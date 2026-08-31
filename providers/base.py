@@ -72,6 +72,10 @@ class Offer:
     min_layover is meaningful only when stops > 0; a direct flight has no
     connection to measure.
 
+    requires_bag_recheck is True when at least one connection forces the
+    traveller to re-claim and re-check bags. It is meaningful only when
+    stops > 0, and None when the provider cannot say.
+
     frozen=True only guards attribute reassignment -- it does not make the
     dataclass hashable (list fields are unhashable) and it does not stop
     in-place mutation of the airlines/segments lists themselves. Offer cannot
@@ -92,6 +96,7 @@ class Offer:
     checked_bag_price: Decimal | None = None
     min_layover: int | None = None      # minutes
     pnr_count: int | None = None
+    requires_bag_recheck: bool | None = None
 
 
 @dataclass(frozen=True)

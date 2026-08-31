@@ -88,6 +88,20 @@ async def test_search_leg_respects_limit(real_html, monkeypatch):
     assert len(offers) == 1
 
 
+async def test_google_cannot_report_baggage_recheck(real_html, monkeypatch):
+    """Google's payload has no layover data, so this must be unknown, not False."""
+    import providers.google as google
+
+    async def fake_fetch(*args, **kwargs):
+        return real_html
+
+    monkeypatch.setattr(google, "fetch_html", fake_fetch)
+    offers = await GoogleProvider().search_leg(
+        LegQuery(origin="LPA", dest="MAD", date="2026-10-06")
+    )
+    assert offers[0].requires_bag_recheck is None
+
+
 # ── Unsupported LegQuery fields (fix round 2, finding 1) ────────────────────
 #
 # Google honours max_stops and exclude_carriers client-side, and must raise
