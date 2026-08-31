@@ -46,28 +46,70 @@ network.
 
 ## How it works
 
-The search runs in phases, because each phase narrows the next. Only hubs that
-are actually reachable from your origin on a given date are worth querying for
-onward flights, which cuts the query count well below a full cross product.
+The search is a two-stage engine built around one capability: a price *calendar*
+can return a cheapest-of-day price for an entire date range in a single request,
+so covering more days costs nothing extra. That one fact is what lets the search
+scan a whole window instead of sampling a handful of dates out of it.
 
 ```mermaid
 flowchart TD
-    A[Origin<br/>e.g. LPA] -->|"Phase 1<br/>discounted leg"| B{Reachable<br/>hubs?}
-    B -->|no flights| X[dropped, never<br/>queried again]
-    B -->|yes| C[MAD, BCN, AGP...]
-    C -->|"Phase 2<br/>international leg"| D[Destinations<br/>NRT, JFK...]
-    C -.->|"Phase 1R<br/>round-trip only"| A
-    D -.->|"Phase 2R<br/>round-trip only"| C
-    D --> E[Combine + apply<br/>discount rule]
-    E --> F[Ranked itineraries<br/>+ booking links]
-    F --> G[(SQLite)]
-    G -->|"every 6h"| H[Re-price tracked<br/>routes]
-    H -->|"drop > 10%"| I[Telegram alert]
+    A[Every hub x destination<br/>pair] -->|"Phase 0: scan<br/>one calendar request each"| B[Cheapest-of-day price,<br/>every day in the window]
+    B -->|"Phase 0b: rank<br/>arithmetic only, 0 requests"| C[Every combination,<br/>ranked cheapest-first]
+    C -->|"Phase 1: confirm<br/>diverse shortlist only"| D{Real, bookable<br/>offer exists?}
+    D -->|no| X[dropped]
+    D -->|yes| E[Confirmed<br/>itineraries]
+    E -->|"Phase 2: baseline"| F[Airline's own<br/>through-fare]
+    F --> G[Ranked itineraries<br/>+ savings + booking links]
+    G --> H[(SQLite)]
+    H -->|"every 6h, same provider"| I[Re-price tracked<br/>routes]
+    I -->|"drop > 10%"| J[Telegram alert]
 ```
+
+**Phase 0 — scan.** One calendar request per leg — the domestic hop to each
+hub, and the onward hop from each hub to each destination — returns a price
+for every day in the window, for that leg alone. A 91-day window costs exactly
+what a one-day window costs — the request count scales with how many hubs and
+destinations you compare, never with how many days you're willing to fly.
+
+**Phase 0b — rank.** Every (hub, destination, date) combination the calendars
+cover gets the discount rule applied and is sorted cheapest-first. This is pure
+arithmetic on numbers already in hand — it costs zero further requests, and a
+91-day window over 8 hubs and 3 destinations produces 2,184 ranked candidates.
+
+**Phase 1 — confirm.** Only a diverse shortlist of the cheapest candidates —
+capped per hub and per date, so one unusually cheap Tuesday can't crowd out
+every other option — gets checked against real, bookable offers. This is the
+one phase that spends real request budget per candidate, which is exactly why
+it runs against a capped shortlist instead of the full ranking.
+
+**Phase 2 — baseline.** The airline's own single-ticket through-fare is priced
+for a handful of dates, so the bot can tell you *"you save 173 EUR"* instead of
+just asserting that splitting the ticket is worth it.
+
+This was verified end to end on a real search:
+
+| | Requests | Coverage |
+|---|---|---|
+| Old grid search | ~640 | 10 sampled dates |
+| Two-stage engine | 92 | every day in a 91-day window |
+
+That is not a projection — 32 calendar requests price the whole window, those
+combine for free into 2,184 ranked candidates, roughly 30 get confirmed against
+real offers, and the through-fare baseline brings the total to 92 requests for
+a search that covers nine times more days than the ~640-request grid search it
+replaced.
+
+Not every provider has a price calendar. Google doesn't, so a Google-only
+deployment falls back to the old grid search: it still works, but it goes back
+to sampling a bounded number of dates (`FALLBACK_MAX_DATES`, default 12)
+instead of covering the whole window for free.
 
 Return legs are deliberately searched as **separate one-way queries** rather than
 as a round-trip search: since the whole point is to book the legs separately, a
-round-trip quote would not be a price you could actually pay.
+round-trip quote would not be a price you could actually pay. When a second
+provider is enabled, the cheapest few confirmed itineraries are also
+cross-checked against it, so a result tagged as priced by both is a stronger
+claim than one only the primary provider could confirm.
 
 ## Features
 
@@ -76,7 +118,7 @@ round-trip quote would not be a price you could actually pay.
   anything is fetched.
 - **Flexible dates** — a fixed list, or a range sampled every N days.
 - **Ranked results** — cheapest itineraries with airlines, stops, durations,
-  per-hub and per-date bests, and deep links straight into Google Flights.
+  per-hub and per-date bests, and deep links straight to each leg's booking page.
 - **Price tracking** — save a route and a background scheduler re-prices it
   every few hours, alerting you when it drops more than 10% below its recorded
   best.
@@ -89,30 +131,40 @@ round-trip quote would not be a price you could actually pay.
 
 ```
 Round-trip · Found 34 routes
-Best: 612 EUR (LPA->MAD->NRT on 2026-09-04 — 2026-09-18)
+Best: 612.00 EUR (LPA->MAD->NRT on 2026-09-04 — 2026-09-18)
 
 Top 10 cheapest routes:
 
-#1  612 EUR (round-trip)
+#1  612.00 EUR (round-trip)
   2026-09-04 — 2026-09-18 | LPA -> MAD (Madrid) -> NRT (NRT)
-  Leg 1: 148 EUR (75% disc.) -> 37 EUR | Iberia, Ryanair | direct | 2h50m
-  Leg 2: 575 EUR | ANA | 1 stop | 15h20m
+  Domestic leg: 148.00 EUR (75% disc.) -> 37.00 EUR
+  Onward leg: 575.00 EUR
+  Domestic out | Onward out | Domestic return | Onward return
+  Warning: this itinerary requires re-checking bags between tickets.
+  Through-fare LPA->NRT   785.00 EUR
+  Split via MAD          612.00 EUR
+  You save               173.00 EUR (22%)
 
-#2  634 EUR (round-trip)
+#2  634.00 EUR (round-trip)
   2026-09-11 — 2026-09-25 | LPA -> BCN (Barcelona) -> NRT (NRT)
   ...
 
 Best price per hub:
-  MAD (Madrid): 612 EUR on 2026-09-04 -> NRT
-  BCN (Barcelona): 634 EUR on 2026-09-11 -> NRT
-  LIS (Lisboa): 719 EUR on 2026-09-04 -> NRT
+  MAD (Madrid): 612.00 EUR on 2026-09-04 -> NRT
+  BCN (Barcelona): 634.00 EUR on 2026-09-11 -> NRT
+  LIS (Lisboa): 719.00 EUR on 2026-09-04 -> NRT
 
-Google Flights links:
-  #1 LPA->MAD->NRT 2026-09-04 — 2026-09-18
-    Leg 1 | Leg 2
-
-Book legs separately to apply the 75% resident discount on Spanish domestic flights.
+Book each leg on its own, separate ticket — that is what lets the discounted
+domestic leg above actually receive its discount. A single through-fare ticket
+does not qualify for it.
 ```
+
+The through-fare and savings lines come from actually pricing the airline's
+single-ticket fare (phase 2), not from an assumption that splitting always
+wins — an itinerary where the through-fare turns out cheaper says so plainly
+instead of quoting a negative saving. The bag-recheck warning appears only
+when a provider that reports it (Kiwi) confirms a connection forces it; it is
+silent, not "no", whenever a provider can't say.
 
 ## Setup
 
@@ -142,11 +194,13 @@ python bot.py
 ```
 
 Message your bot `/start`. The bot is **single-user by design** — it refuses
-every account except `OWNER_ID`, because each search issues hundreds of scraping
-requests and that budget is not something to expose publicly.
+every account except `OWNER_ID`, because each search issues dozens to hundreds
+of requests against third-party sources and that budget is not something to
+expose publicly.
 
 Every other setting has a sensible default; see [`.env.example`](.env.example) for
-the full list, including the discount rule, concurrency and alert thresholds.
+the full list, including the discount rule, concurrency, alert thresholds and
+the engine's own tuning knobs (shortlist size, diversity caps, window bounds).
 
 ## Architecture
 
@@ -159,7 +213,14 @@ providers/
   google.py             Google Flights: tfs URL encoding, HTTP, parsing, provider adapter
   kiwi.py               Kiwi.com GraphQL client: calendar, itinerary and place search
   registry.py           provider selection, driven by the PROVIDERS env var
-search.py               multi-phase orchestrator, discount maths, formatting
+engine/
+  scan.py               phase 0: price a whole date window from calendars
+  shortlist.py          phase 0b: rank + diversify -- arithmetic only, no requests
+  drill.py              phase 1/2: confirm a shortlist against real offers; price the through-fare
+  grid.py               sampled-date fallback for a provider with no calendar (Google)
+  fetch.py              bounded-concurrency leg fetcher shared by every phase
+  orchestrator.py       run_search: strategy selection, phase sequencing, cross-check
+search.py               Telegram/JSON presentation for engine results: formatting, history storage
 scheduler.py            background price-tracking loop
 db.py                   async SQLite layer with in-place migrations
 handlers/
@@ -226,15 +287,28 @@ introspects the live schema and fails if a field the client reads has moved.
 
 ## Limitations
 
-- **Self-transfer risk.** Two separate tickets means no protection if the first
-  leg is delayed and you miss the second. Leave a real buffer between legs.
-- **Scraping is fragile by nature.** The parser reads undocumented positions in
-  Google's response payload; a layout change breaks it. It fails loudly rather
+- **Self-transfer risk, still real at the ticket boundary.** Two separate
+  tickets means no interline protection if the first is delayed and you miss
+  the second — no data source changes that, and it is still on you to leave a
+  real buffer between legs. What *is* now modelled is a related but distinct
+  risk: whether a connection *inside* one of the two tickets forces you to
+  reclaim and re-check your bags before the next segment. When a provider
+  reports that (Kiwi does), the bot warns about it per itinerary; it says
+  nothing when the provider can't tell, rather than implying "no".
+- **Baggage allowance and cost are captured, but not yet netted into the
+  price.** Included cabin/checked-bag allowances and the extra checked-bag fee
+  now come through per offer, from providers that expose them. What is still
+  true: the total and the savings figure the bot reports are base fares only,
+  so if your itinerary needs a paid checked bag on one or both tickets, add
+  that cost yourself before trusting the reported saving against a
+  through-fare that may already include one.
+- **Scraping is fragile by nature.** Kiwi is queried through its own API, but
+  Google — the fallback provider, used when Kiwi is disabled or as a
+  cross-check — is still scraped, and its parser reads undocumented positions
+  in the response payload; a layout change breaks it. It fails loudly rather
   than silently returning nothing.
 - **Resident discount eligibility is not verified.** The bot applies the discount
   arithmetically. Actually receiving it requires proof of residency at booking.
-- **Baggage and fees are not modelled.** Two tickets can mean paying for checked
-  baggage twice, which can erode the saving on short trips.
 
 ## Legal
 
