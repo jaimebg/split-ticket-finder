@@ -40,6 +40,18 @@ MAX_CONCURRENCY/DEFAULT_DELAY for anything else (review finding I3 -- Kiwi
 tolerates far more load than scraping Google does, and the two must not
 share one budget). It is keyed on capability, the same way strategy
 selection is, never on a provider's ``name`` string.
+
+``run_search`` accepts optional ``concurrency``/``delay`` overrides (review
+follow-up to I3) that flow through every fetcher a single call creates --
+the primary phases' and, separately, the cross-check's. ``None`` (the
+default) means "use ``_budget``'s per-provider config value", exactly the
+behaviour before these parameters existed; a caller that supplies one
+(a test, typically -- real pacing has no reason to differ per call in
+production) gets it verbatim instead. This is what lets I3's behaviour be
+asserted directly rather than merely endured: a test can pin that the real
+per-provider default is used when nothing is passed, and separately run
+every other test at ``delay=0`` without weakening -- or even touching --
+the default itself.
 """
 from __future__ import annotations
 
@@ -84,7 +96,12 @@ STRATEGY_TWO_STAGE = "two-stage"
 STRATEGY_GRID = "grid"
 
 
-def _budget(provider: FlightProvider) -> tuple[int, float]:
+def _budget(
+    provider: FlightProvider,
+    *,
+    concurrency: int | None = None,
+    delay: float | None = None,
+) -> tuple[int, float]:
     """The (concurrency, delay) a fetcher against *provider* should use.
 
     Review finding I3: this used to be a flat ``_CONCURRENCY = 8`` /
@@ -97,10 +114,23 @@ def _budget(provider: FlightProvider) -> tuple[int, float]:
     since that is what actually distinguishes "tolerates load" (Kiwi's API)
     from "must be throttled" (scraping Google) in this codebase, and stays
     correct even if a future calendar-capable provider isn't named "kiwi".
+
+    ``concurrency``/``delay``, independently, override the per-provider
+    config default when given (review follow-up to I3): the engine reaching
+    into config and imposing it on every caller with no way to say
+    otherwise made I3's own pacing untestable except by genuinely sleeping
+    through it. ``None`` for either (the default) keeps that value
+    config-derived exactly as before -- this is an added seam, not a
+    weakened default.
     """
-    if isinstance(provider, SupportsCalendar):
-        return KIWI_CONCURRENCY, KIWI_DELAY
-    return MAX_CONCURRENCY, DEFAULT_DELAY
+    default_concurrency, default_delay = (
+        (KIWI_CONCURRENCY, KIWI_DELAY) if isinstance(provider, SupportsCalendar)
+        else (MAX_CONCURRENCY, DEFAULT_DELAY)
+    )
+    return (
+        default_concurrency if concurrency is None else concurrency,
+        default_delay if delay is None else delay,
+    )
 
 # spec §5.7: only the cheapest few confirmed itineraries are cross-checked
 # against a second enabled provider -- doing it for the whole shortlist
@@ -236,6 +266,8 @@ async def _cross_check(
     currency: str,
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
+    concurrency: int | None = None,
+    delay: float | None = None,
 ) -> tuple[list[Itinerary], int, int]:
     """Tag every itinerary with the provider(s) that priced it.
 
@@ -283,8 +315,8 @@ async def _cross_check(
     ]
     relabel = _PhaseRelabeler(on_progress)
     relabel.retitle({CONFIRM_PHASE: CROSS_CHECK_PHASE})
-    concurrency, delay = _budget(secondary)
-    fetcher = LegFetcher(secondary, concurrency=concurrency, delay=delay,
+    resolved_concurrency, resolved_delay = _budget(secondary, concurrency=concurrency, delay=delay)
+    fetcher = LegFetcher(secondary, concurrency=resolved_concurrency, delay=resolved_delay,
                           cancel=cancel, on_progress=relabel)
     try:
         rechecked = await confirm(
@@ -326,14 +358,17 @@ async def _run_two_stage(
     currency: str,
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
+    concurrency: int | None = None,
+    delay: float | None = None,
 ) -> tuple[list[Itinerary], CalendarGrid, int, int]:
     """Phase 0 -> 0b -> 1 -> 2, cancellable between each."""
-    concurrency, delay = _budget(provider)
+    resolved_concurrency, resolved_delay = _budget(provider, concurrency=concurrency, delay=delay)
     _check_cancel(cancel)
     grid = await scan_calendars(
         provider, origin=origin, hubs=list(hubs), dests=list(destinations),
         window=window, trip_days=trip_days, adults=adults, currency=currency,
-        concurrency=concurrency, delay=delay, cancel=cancel, on_progress=on_progress,
+        concurrency=resolved_concurrency, delay=resolved_delay, cancel=cancel,
+        on_progress=on_progress,
     )
 
     _check_cancel(cancel)
@@ -346,7 +381,7 @@ async def _run_two_stage(
     )
 
     _check_cancel(cancel)
-    fetcher = LegFetcher(provider, concurrency=concurrency, delay=delay,
+    fetcher = LegFetcher(provider, concurrency=resolved_concurrency, delay=resolved_delay,
                           cancel=cancel, on_progress=on_progress)
     itineraries = await confirm(
         fetcher, shortlist, origin=origin, trip_days=trip_days,
@@ -380,6 +415,8 @@ async def _run_grid(
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
     dates: list[str] | None = None,
+    concurrency: int | None = None,
+    delay: float | None = None,
 ) -> tuple[list[Itinerary], None, int, int]:
     """The four-phase grid fallback, plus the through-fare baseline.
 
@@ -396,10 +433,10 @@ async def _run_grid(
     arbitrary window to sample from) must have the grid path search those
     dates, not silently resample its own from the window instead.
     """
-    concurrency, delay = _budget(provider)
+    resolved_concurrency, resolved_delay = _budget(provider, concurrency=concurrency, delay=delay)
     _check_cancel(cancel)
     relabel = _PhaseRelabeler(on_progress)
-    fetcher = LegFetcher(provider, concurrency=concurrency, delay=delay,
+    fetcher = LegFetcher(provider, concurrency=resolved_concurrency, delay=resolved_delay,
                           cancel=cancel, on_progress=relabel)
     itineraries = await run_grid_search(
         fetcher, origin=origin, dests=list(destinations), hubs=list(hubs),
@@ -433,6 +470,8 @@ async def run_search(
     cancel: CancelToken | None = None,
     on_progress: ProgressCallback | None = None,
     dates: list[str] | None = None,
+    concurrency: int | None = None,
+    delay: float | None = None,
 ) -> SearchResult:
     """Run a full split-ticket search and return every phase's output as one result.
 
@@ -461,6 +500,15 @@ async def run_search(
     every day in ``window`` for the same one calendar request, so there is
     nothing to resample away in the first place -- a caller that only wants
     a subset of those days back must filter the returned itineraries itself.
+
+    ``concurrency``/``delay``, independently, override ``_budget``'s
+    per-provider config default for every fetcher this call creates --
+    the primary phases' and the cross-check's alike (review follow-up to
+    I3). ``None`` (the default) means "use the config value for whichever
+    provider each fetcher actually talks to"; this is the seam that lets a
+    test assert I3's real per-provider default is used when nothing is
+    passed, and separately run at ``delay=0`` everywhere else, without
+    weakening the default itself.
 
     Cancellation is checked between every phase (see ``_run_two_stage`` /
     ``_run_grid`` / ``_cross_check``); a token cancelled after one phase
@@ -502,7 +550,7 @@ async def run_search(
         itineraries, scan, parse_errors, fetch_errors = await _run_two_stage(
             provider, origin=origin, destinations=destinations, hubs=hubs,
             window=window, trip_days=trip_days, adults=adults, currency=currency,
-            cancel=cancel, on_progress=on_progress,
+            cancel=cancel, on_progress=on_progress, concurrency=concurrency, delay=delay,
         )
     else:
         strategy = STRATEGY_GRID
@@ -510,12 +558,13 @@ async def run_search(
             provider, origin=origin, destinations=destinations, hubs=hubs,
             window=window, trip_days=trip_days, adults=adults, currency=currency,
             cancel=cancel, on_progress=on_progress, dates=dates,
+            concurrency=concurrency, delay=delay,
         )
 
     tagged, xc_parse_errors, xc_fetch_errors = await _cross_check(
         itineraries, provider, secondary, origin=origin, trip_days=trip_days,
         hub_names=hubs, dest_names=destinations, adults=adults, currency=currency,
-        cancel=cancel, on_progress=on_progress,
+        cancel=cancel, on_progress=on_progress, concurrency=concurrency, delay=delay,
     )
 
     return SearchResult(

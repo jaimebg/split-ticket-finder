@@ -27,10 +27,32 @@ import pytest
 import config
 import engine.fetch as fetch_module
 import engine.orchestrator as orchestrator
-from engine.orchestrator import SearchResult, run_search
+from engine.orchestrator import SearchResult
+from engine.orchestrator import run_search as _real_run_search
 from models import CancelToken, Progress, SearchCancelled, SearchWindow
 from providers.base import ProviderError, ProviderFetchError, ProviderParseError, RatedPrice
 from tests.test_engine_fetch import FakeProvider, _offer
+
+
+async def run_search(**kwargs):
+    """Test-local wrapper around the real ``run_search``: defaults ``delay=0``.
+
+    Review follow-up to I3: ``run_search`` now reads real per-provider
+    delays from config (KIWI_DELAY=0.3s, DEFAULT_DELAY=2.5s) instead of a
+    hardcoded 0.0, which is correct in production and made this file
+    genuinely sleep through every test that issues a leg query -- 53s for a
+    suite that used to run in under a second, for zero additional coverage.
+    ``concurrency``/``delay`` exist as explicit ``run_search`` parameters
+    precisely so a test can say otherwise; every test in this file that
+    doesn't care about pacing (all but two, see
+    test_run_search_uses_the_real_kiwi_budget_when_nothing_is_passed and its
+    grid counterpart below) goes through this wrapper rather than repeating
+    ``delay=0`` at 29 call sites. ``kwargs.setdefault`` means an explicit
+    ``delay=`` -- ``None`` included, to deliberately fall through to the
+    real per-provider default -- still wins over this wrapper's own default.
+    """
+    kwargs.setdefault("delay", 0)
+    return await _real_run_search(**kwargs)
 
 
 def _offer_pnr(price: str):
@@ -824,6 +846,68 @@ def test_budget_picks_default_knobs_for_a_provider_without_a_calendar():
     assert orchestrator._budget(FakeProvider()) == (
         config.MAX_CONCURRENCY, config.DEFAULT_DELAY,
     )
+
+
+# ── Review follow-up to I3: concurrency/delay are an explicit override seam,
+# not just config-derived -- so I3's real default can be asserted through
+# run_search itself (not merely endured by every other test sleeping
+# through it), and every other test can run at delay=0 without touching the
+# default at all. ─────────────────────────────────────────────────────────
+
+
+def test_budget_override_replaces_only_the_given_value():
+    """concurrency and delay override independently -- passing one must not
+    silently reset the other to the per-provider default's *other* half."""
+    assert orchestrator._budget(FakeCalendarProvider(), delay=0) == (
+        config.KIWI_CONCURRENCY, 0,
+    )
+    assert orchestrator._budget(FakeProvider(), concurrency=99) == (
+        99, config.DEFAULT_DELAY,
+    )
+
+
+def test_budget_override_of_both_wins_over_either_providers_default():
+    assert orchestrator._budget(FakeCalendarProvider(), concurrency=1, delay=0) == (1, 0)
+    assert orchestrator._budget(FakeProvider(), concurrency=1, delay=0) == (1, 0)
+
+
+async def test_run_search_uses_the_real_kiwi_budget_when_nothing_is_passed(monkeypatch):
+    """The actual guard on I3, through the public entry point: with no
+    concurrency/delay argument at all, a SupportsCalendar provider's real
+    fetcher must be built from the genuine KIWI_CONCURRENCY/KIWI_DELAY
+    config values -- not a hardcoded literal, and not a value only a test
+    supplied. Calls the real orchestrator.run_search directly (bypassing
+    this file's delay=0 test wrapper) so the default actually flows through
+    unmodified; hubs={} means scan_calendars has no jobs and confirm sees an
+    empty shortlist, so no leg is ever actually queried and this does not
+    sleep despite the real, nonzero KIWI_DELAY being in effect."""
+    _neutral_discount(monkeypatch)
+    seen = _spy_on_leg_fetcher_init(monkeypatch)
+    provider = FakeCalendarProvider()
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await orchestrator.run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={},
+        window=WINDOW, trip_days=0, provider=provider,
+    )
+
+    assert seen == [(config.KIWI_CONCURRENCY, config.KIWI_DELAY)]
+
+
+async def test_run_search_uses_the_real_default_budget_when_nothing_is_passed(monkeypatch):
+    """Same guard, Google-shaped: no calendar means MAX_CONCURRENCY/
+    DEFAULT_DELAY, the genuine config values, with nothing overridden."""
+    _neutral_discount(monkeypatch)
+    seen = _spy_on_leg_fetcher_init(monkeypatch)
+    provider = FakeProvider()
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await orchestrator.run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={},
+        window=WINDOW, trip_days=0, provider=provider,
+    )
+
+    assert seen == [(config.MAX_CONCURRENCY, config.DEFAULT_DELAY)]
 
 
 def _spy_on_leg_fetcher_init(monkeypatch) -> list[tuple[int, float]]:
