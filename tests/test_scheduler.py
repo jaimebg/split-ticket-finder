@@ -57,11 +57,15 @@ def _itin(
 def fake_engine(monkeypatch):
     """Replace scheduler.run_search with a scripted, capture-everything fake."""
     calls: list[dict] = []
-    state = {"itineraries": [_itin()]}
+    state = {"itineraries": [_itin()], "parse_errors": 0, "fetch_errors": 0}
 
     async def fake_run_search(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(itineraries=state["itineraries"])
+        return SimpleNamespace(
+            itineraries=state["itineraries"],
+            parse_errors=state["parse_errors"],
+            fetch_errors=state["fetch_errors"],
+        )
 
     monkeypatch.setattr(scheduler_module, "run_search", fake_run_search)
     return {"calls": calls, "state": state}
@@ -244,6 +248,50 @@ async def test_no_itineraries_found_is_skipped(temp_db, fake_engine):
     assert bot.messages == []
     fav = (await db_module.get_favorites())[0]
     assert fav["last_price"] == pytest.approx(600.0)  # untouched
+
+
+async def test_provider_errors_are_logged_distinctly_from_a_genuine_empty_result(
+    temp_db, fake_engine, caplog,
+):
+    """Review finding C2: a provider that failed on every request also
+    returns an empty itinerary list -- the log must say so distinctly from a
+    route that was genuinely searched and came back with nothing (this
+    project's central empty-vs-broken rule)."""
+    fake_engine["state"]["itineraries"] = []
+    fake_engine["state"]["parse_errors"] = 3
+    fake_engine["state"]["fetch_errors"] = 2
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=600.0, check_dates=["2026-09-01"], trip_days=0,
+    )
+
+    with caplog.at_level("INFO"):
+        await check_favorites(FakeBot(), owner_chat_id=1)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("could not fully check" in m for m in messages)
+    assert not any("no flights found" in m for m in messages)
+
+
+async def test_a_clean_empty_result_still_logs_as_no_flights_found(
+    temp_db, fake_engine, caplog,
+):
+    """The counterpart to the test above: no errors at all must still say
+    "no flights found" plainly, not grow a spurious incompleteness caveat."""
+    fake_engine["state"]["itineraries"] = []
+
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=600.0, check_dates=["2026-09-01"], trip_days=0,
+    )
+
+    with caplog.at_level("INFO"):
+        await check_favorites(FakeBot(), owner_chat_id=1)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("no flights found" in m for m in messages)
+    assert not any("could not fully check" in m for m in messages)
 
 
 async def test_favorite_with_no_dates_is_skipped(temp_db, fake_engine):

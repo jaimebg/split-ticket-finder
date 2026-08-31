@@ -160,3 +160,39 @@ async def test_a_date_the_user_asked_for_is_never_dropped_by_filtering(temp_db, 
     stored = (await db_module.get_searches(1))[0]
     stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
+
+
+# ── C2: broken must not look like empty ──────────────────────────────────────
+
+
+async def test_a_provider_erroring_on_every_request_says_results_may_be_incomplete(
+    temp_db, fake_engine,
+):
+    """When Kiwi 403s every calendar request, scan_calendars counts fetch
+    errors and returns an empty grid -- the user must not be told the bare
+    "<b>No routes found.</b>" that reads as a confirmed empty search."""
+    fake_engine["state"]["itineraries"] = []
+    fake_engine["state"]["parse_errors"] = 0
+    fake_engine["state"]["fetch_errors"] = 32
+    params = _base_params()
+
+    bot = FakeBot()
+    await run_and_report(bot, chat_id=1, params=params)
+
+    sent_text = "\n".join(bot.messages)
+    assert "No routes found" in sent_text  # still says this...
+    assert "incomplete" in sent_text        # ...but qualified
+    assert "32" in sent_text
+
+
+async def test_a_clean_search_with_no_errors_says_nothing_extra(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]
+    fake_engine["state"]["parse_errors"] = 0
+    fake_engine["state"]["fetch_errors"] = 0
+    params = _base_params(dates=["2026-09-01"])
+
+    bot = FakeBot()
+    await run_and_report(bot, chat_id=1, params=params)
+
+    sent_text = "\n".join(bot.messages)
+    assert "incomplete" not in sent_text

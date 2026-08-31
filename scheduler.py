@@ -97,7 +97,19 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
 
         itineraries = result.itineraries
         if not itineraries:
-            logger.info("Favorite %d: no flights found in sampled dates.", fav_id)
+            # Empty and broken must not be logged alike (review finding C2):
+            # a provider erroring on every request also returns an empty
+            # itinerary list here, and without this check that reads in the
+            # logs exactly like a route that was genuinely searched and
+            # came back empty.
+            if result.parse_errors or result.fetch_errors:
+                logger.warning(
+                    "Favorite %d: %d parse and %d fetch failures — could not "
+                    "fully check this route, not necessarily no flights.",
+                    fav_id, result.parse_errors, result.fetch_errors,
+                )
+            else:
+                logger.info("Favorite %d: no flights found in sampled dates.", fav_id)
             continue
 
         best = min(itineraries, key=lambda itin: itin.total)

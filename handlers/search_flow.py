@@ -518,7 +518,29 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
     origin = params["origin"]
     currency = params["currency"]
 
-    for chunk in split_message(format_results(itineraries, origin, currency)):
+    # Empty and broken must never look alike (this project's central rule):
+    # a provider that failed on every request also returns an empty
+    # itinerary list, and without this, that reaches the user as the same
+    # "<b>No routes found.</b>" a route that was genuinely searched and came
+    # back empty gets (review finding C2). Layer 1 logged this aggregate;
+    # this branch's wiring had dropped it entirely.
+    incomplete_notice = ""
+    if result.parse_errors or result.fetch_errors:
+        logger.warning(
+            "Search completed with %d parse failures and %d fetch failures "
+            "for %s — results may be incomplete.",
+            result.parse_errors, result.fetch_errors, params,
+        )
+        incomplete_notice = (
+            "\n\n<i>Note: "
+            f"{result.parse_errors} parse and {result.fetch_errors} fetch "
+            "request(s) failed during this search — treat the results above "
+            "as incomplete, not a confirmed count (including \"no routes "
+            "found\", if that's what you see).</i>"
+        )
+
+    report_text = format_results(itineraries, origin, currency) + incomplete_notice
+    for chunk in split_message(report_text):
         await bot.send_message(
             chat_id=chat_id,
             text=chunk,
