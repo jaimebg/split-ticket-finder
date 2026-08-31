@@ -237,13 +237,21 @@ async def add_favorite(
     """Add a route to favorites and return its row id.
 
     *trip_days*, *provider*, *cabin*, *children*, *max_stops* and
-    *min_layover* together are the query shape the *price* was quoted under.
-    The scheduler must replay that exact shape, otherwise it compares two
-    different queries and reports the difference as a price movement — the
+    *min_layover* together describe the query shape the *price* was quoted
+    under. Of these, ``scheduler.check_favorites`` actually reads back and
+    replays only *trip_days* and *provider* today (review finding I7) — the
     same reasoning that made *trip_days* necessary: a round-trip favourite
-    re-priced as one-way looks like a 50% crash, every cycle. The defaults
-    here match `providers.base.LegQuery`'s own defaults, so a favourite added
-    without specifying them replays as the unqualified search it came from.
+    re-priced as one-way looks like a 50% crash, every cycle.
+
+    *cabin*, *children*, *max_stops* and *min_layover* are stored but not yet
+    replayed: nothing in the guided flow sets them away from their defaults
+    yet, so there is no live bug, but they are reserved for Layer 3 (whoever
+    adds a cabin or stops selector must also teach the scheduler to read
+    these columns back, or reintroduce the round-trip-shaped bug fixed in
+    e83a4d3 for whichever of them they wire up). The columns stay regardless
+    -- do not drop them. The defaults here match `providers.base.LegQuery`'s
+    own defaults, so a favourite added without specifying them replays as
+    the unqualified search it came from.
     """
     now = _now()
     async with _connect() as db:
