@@ -205,6 +205,35 @@ async def test_diversify_narrows_the_shortlist_before_confirm_is_called(monkeypa
 # ── Progress ─────────────────────────────────────────────────────────────────
 
 
+def _assert_progress_labels_well_formed(ticks: list[Progress], expected_order: list[str]) -> None:
+    """Shared shape-of-progress assertion (review finding: phase-name
+    collisions across composed calls).
+
+    ``expected_order`` is the exact, deduplicated sequence of labels a
+    caller should see, in first-appearance order -- asserting equality
+    against it is what proves every label is unique (a raw label reused
+    for an unrelated later segment would either be missing from this list,
+    if it never got its own distinct name, or -- the actual bug -- appear
+    only once here while its ``done`` sequence below secretly resets to 0
+    partway through, which the monotonicity check below would catch).
+
+    For each label: the ``done`` values across every tick carrying that
+    label, in emission order, must never decrease (a label reused for a
+    second, later segment would jump back down from a completed total to
+    0 -- exactly the "phase restarts" bug), and the last tick for that
+    label must be complete.
+    """
+    seen_order = list(dict.fromkeys(t.phase for t in ticks))
+    assert seen_order == expected_order
+
+    for phase in expected_order:
+        phase_ticks = [t for t in ticks if t.phase == phase]
+        dones = [t.done for t in phase_ticks]
+        assert dones == sorted(dones), f"{phase!r} done went backwards: {dones}"
+        assert phase_ticks[-1].done == phase_ticks[-1].total
+        assert phase_ticks[-1].fraction == 1.0
+
+
 async def test_progress_phases_arrive_in_order_and_end_complete(monkeypatch):
     _neutral_discount(monkeypatch)
     provider = _one_hub_scenario()
@@ -216,14 +245,78 @@ async def test_progress_phases_arrive_in_order_and_end_complete(monkeypatch):
         window=WINDOW, trip_days=0, provider=provider, on_progress=ticks.append,
     )
 
-    # First appearance of each phase name, in the order it first appears.
-    seen_order = list(dict.fromkeys(t.phase for t in ticks))
-    assert seen_order == ["Phase 0", "Phase 1", "Phase 2"]
+    _assert_progress_labels_well_formed(ticks, ["Phase 0", "Phase 1", "Phase 2"])
 
-    for phase in seen_order:
-        phase_ticks = [t for t in ticks if t.phase == phase]
-        assert phase_ticks[-1].done == phase_ticks[-1].total
-        assert phase_ticks[-1].fraction == 1.0
+
+async def test_grid_progress_labels_are_unique_and_monotonic(monkeypatch):
+    """Review finding #1: run_grid_search reports its onward (hub->dest) leg
+    as "Phase 2", and through_fares -- which _run_grid shares one LegFetcher
+    with -- hardcodes "Phase 2" too. Without relabelling, a caller watching
+    phase names would see "Phase 2" finish at the end of the grid search,
+    then restart at 0/1 for the unrelated through-fare query."""
+    _neutral_discount(monkeypatch)
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-10-01"): [_offer("25")],
+        ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("700")],
+    })
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    ticks: list[Progress] = []
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=provider, on_progress=ticks.append,
+    )
+
+    assert result.strategy == "grid"
+    assert len(result.itineraries) == 1
+    assert result.itineraries[0].through_fare == Decimal("700")
+
+    _assert_progress_labels_well_formed(
+        ticks, ["Phase 1", "Phase 2", orchestrator.GRID_THROUGH_FARE_PHASE]
+    )
+
+
+async def test_cross_check_progress_labels_are_unique_and_monotonic(monkeypatch):
+    """Review finding #2: engine.drill.confirm() always reports "Phase 1",
+    and _cross_check hands it the same on_progress a second time (after
+    two-stage's own phase 1 already completed under that exact label).
+    Without relabelling, a caller would see "Phase 1" finish, then restart
+    at 0/N for the cross-check -- the same shape of bug as finding #1, on
+    the two-stage path instead of the grid path."""
+    _neutral_discount(monkeypatch)
+    hubs = ["MAD", "BCN", "LIS", "SVQ"]
+    prices = {"MAD": "10", "BCN": "20", "LIS": "30", "SVQ": "1000"}
+    calendar_answers = {("LPA", h): {"2026-10-01": prices[h]} for h in hubs}
+    calendar_answers.update({(h, "NRT"): {"2026-10-01": "500"} for h in hubs})
+    leg_answers = {("LPA", h, "2026-10-01"): [_offer(prices[h])] for h in hubs}
+    leg_answers.update({(h, "NRT", "2026-10-01"): [_offer("500")] for h in hubs})
+
+    primary = FakeCalendarProvider(
+        name="primary", calendar_answers=calendar_answers, leg_answers=leg_answers,
+    )
+    secondary = FakeProvider({
+        **{("LPA", h, "2026-10-01"): [_offer(prices[h])] for h in hubs},
+        **{(h, "NRT", "2026-10-01"): [_offer("500")] for h in hubs},
+    })
+    monkeypatch.setattr(
+        orchestrator, "enabled_providers",
+        lambda: {"primary": primary, "secondary": secondary},
+    )
+    ticks: list[Progress] = []
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={h: h for h in hubs},
+        window=WINDOW, trip_days=0, provider=primary, on_progress=ticks.append,
+    )
+
+    assert len(result.itineraries) == 4
+    top3 = result.itineraries[:3]
+    assert all(set(i.providers) == {primary.name, secondary.name} for i in top3)
+
+    _assert_progress_labels_well_formed(
+        ticks, ["Phase 0", "Phase 1", "Phase 2", orchestrator.CROSS_CHECK_PHASE]
+    )
 
 
 # ── Cancellation between phases ─────────────────────────────────────────────
@@ -388,6 +481,36 @@ async def test_confirm_phase_errors_are_also_aggregated(monkeypatch):
     assert result.itineraries == []  # the one candidate lost its domestic leg
 
 
+async def test_error_counters_from_two_phases_are_summed(monkeypatch):
+    """Each test above isolates one phase's contribution. This one induces
+    a parse error in phase 0 (scan) *and* a separate one in phase 1
+    (confirm) in the same run, and asserts the total -- proving the
+    aggregation is genuine addition, not just "whichever phase happened to
+    run last" or "only the first error counted"."""
+    _neutral_discount(monkeypatch)
+    provider = FakeCalendarProvider(
+        calendar_answers={
+            ("LPA", "BCN"): {"2026-10-01": "10"},
+            ("BCN", "NRT"): {"2026-10-01": "500"},
+        },
+        # Phase 0: LPA->MAD's calendar can't be read, so MAD never becomes a
+        # candidate at all -- BCN is unaffected and still reaches phase 1.
+        calendar_errors={("LPA", "MAD"): ProviderParseError("scan boom")},
+        # Phase 1: BCN's own domestic leg then fails too.
+        leg_errors={("LPA", "BCN", "2026-10-01"): ProviderParseError("confirm boom")},
+    )
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"},
+        hubs={"MAD": "Madrid", "BCN": "Barcelona"},
+        window=WINDOW, trip_days=0, provider=provider,
+    )
+
+    assert result.parse_errors == 2  # 1 from the scan, 1 from confirm
+    assert result.itineraries == []  # BCN also lost its domestic leg
+
+
 # ── Cross-check (spec §5.7) ──────────────────────────────────────────────────
 
 
@@ -428,6 +551,67 @@ async def test_cross_check_tags_only_the_top_three_with_both_providers(monkeypat
 
     # The secondary was only ever asked about the top-3 hubs, never SVQ.
     assert all(q.origin != "SVQ" and q.dest != "SVQ" for q in secondary.seen)
+
+
+async def test_cross_check_errors_reach_search_result(monkeypatch):
+    """The cross-check's own LegFetcher errors are unverified today (every
+    existing test either has no secondary or a secondary that fully
+    succeeds). Here the secondary fails every query it is asked, and the
+    resulting fetch_errors must still surface on SearchResult -- not just
+    get logged and dropped -- exactly as confirm's phase-1 errors already
+    do (test_confirm_phase_errors_are_also_aggregated)."""
+    _neutral_discount(monkeypatch)
+    primary = _one_hub_scenario()
+    secondary = FakeProvider(error=ProviderFetchError("cross-check boom"))
+    monkeypatch.setattr(
+        orchestrator, "enabled_providers", lambda: {"primary": primary, "secondary": secondary},
+    )
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=primary,
+    )
+
+    # One confirmed itinerary, one-way: legs_for gives it 2 legs
+    # (LPA->MAD, MAD->NRT), both of which fail against the secondary.
+    assert result.fetch_errors == 2
+    assert len(result.itineraries) == 1
+    # The secondary never managed to confirm it, so only primary's tag stands.
+    assert result.itineraries[0].providers == (primary.name,)
+
+
+async def test_cross_check_with_fewer_than_three_confirmed_itineraries(monkeypatch):
+    """Only 2 confirmed itineraries exist -- fewer than CROSS_CHECK_TOP_N
+    (3). ``confirmed_indices[:CROSS_CHECK_TOP_N]`` slices this correctly
+    (Python slicing past the end of a list is not an error), but nothing
+    pinned that before; this does."""
+    _neutral_discount(monkeypatch)
+    hubs = ["MAD", "BCN"]
+    prices = {"MAD": "10", "BCN": "20"}
+    calendar_answers = {("LPA", h): {"2026-10-01": prices[h]} for h in hubs}
+    calendar_answers.update({(h, "NRT"): {"2026-10-01": "500"} for h in hubs})
+    leg_answers = {("LPA", h, "2026-10-01"): [_offer(prices[h])] for h in hubs}
+    leg_answers.update({(h, "NRT", "2026-10-01"): [_offer("500")] for h in hubs})
+
+    primary = FakeCalendarProvider(
+        name="primary", calendar_answers=calendar_answers, leg_answers=leg_answers,
+    )
+    secondary = FakeProvider({
+        **{("LPA", h, "2026-10-01"): [_offer(prices[h])] for h in hubs},
+        **{(h, "NRT", "2026-10-01"): [_offer("500")] for h in hubs},
+    })
+    monkeypatch.setattr(
+        orchestrator, "enabled_providers",
+        lambda: {"primary": primary, "secondary": secondary},
+    )
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={h: h for h in hubs},
+        window=WINDOW, trip_days=0, provider=primary,
+    )
+
+    assert len(result.itineraries) == 2
+    assert all(set(i.providers) == {primary.name, secondary.name} for i in result.itineraries)
 
 
 async def test_a_single_enabled_provider_means_no_cross_check(monkeypatch):

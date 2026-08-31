@@ -35,12 +35,20 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from config import DISCOUNT_AIRPORTS, DOMESTIC_DISCOUNT
-from engine.drill import confirm, through_fares
+from engine.drill import PHASE as CONFIRM_PHASE
+from engine.drill import PHASE_THROUGH_FARE, confirm, through_fares
 from engine.fetch import LegFetcher
 from engine.grid import run_grid_search
 from engine.scan import CalendarGrid, rank_candidates, scan_calendars
 from engine.shortlist import diversify
-from models import CancelToken, Candidate, Itinerary, ProgressCallback, SearchWindow
+from models import (
+    CancelToken,
+    Candidate,
+    Itinerary,
+    Progress,
+    ProgressCallback,
+    SearchWindow,
+)
 from providers.base import FlightProvider, SupportsCalendar
 from providers.registry import enabled_providers, primary_provider
 
@@ -64,6 +72,80 @@ _DELAY = 0.0
 # against a second enabled provider -- doing it for the whole shortlist
 # would double the request count for diminishing benefit.
 CROSS_CHECK_TOP_N = 3
+
+# Review finding (Task 10): engine.drill and engine.grid each hardcode their
+# own phase label at the LegFetcher.fetch_many call site, and neither module
+# may be touched to parameterise it. Composed within one run_search call,
+# two of those hardcoded labels collide with a label already emitted earlier
+# in the same run:
+#
+#   - _run_grid calls run_grid_search (which itself reports its onward leg
+#     as "Phase 2") and then through_fares, whose own hardcoded label is
+#     also "Phase 2" -- a caller sees "Phase 2" finish, then restart at 0/M.
+#   - _cross_check's confirm() call hardcodes "Phase 1" -- colliding with
+#     whichever phase already used that label earlier in the same run
+#     (two-stage's own confirm, or the grid fallback's first leg).
+#
+# Two-stage's own "Phase 0" / "Phase 1" / "Phase 2" never collide with each
+# other (through_fares' "Phase 2" is only ever emitted once there, after
+# confirm's "Phase 1" has already finished), so two-stage's own labels are
+# left exactly as engine.drill/engine.scan report them -- unchanged, and
+# still what tests/test_engine_orchestrator.py's
+# test_progress_phases_arrive_in_order_and_end_complete pins.
+#
+# _PhaseRelabeler (below) is what relabels the two colliding calls, so every
+# label a caller observes across one run_search call is unique.
+GRID_THROUGH_FARE_PHASE = "Phase 2 (through-fare)"
+CROSS_CHECK_PHASE = "Phase 1 (cross-check)"
+
+
+class _PhaseRelabeler:
+    """Wraps a caller's ``on_progress``, renaming one hardcoded phase label
+    to a distinct one for whichever composed call is about to run.
+
+    ``engine.drill.confirm``/``engine.drill.through_fares`` and
+    ``engine.grid.run_grid_search`` each pass a fixed phase string straight
+    to ``LegFetcher.fetch_many`` -- there is no parameter to give them a
+    different one, and both modules are reviewed and out of this task's
+    charter. When this orchestrator sequences two such calls behind one
+    shared ``on_progress`` and both happen to use the same raw label, a
+    caller keyed on phase name sees a completed phase "restart" at 0/M.
+
+    ``retitle`` swaps the raw -> shown mapping used for the next call.
+    Composed calls never overlap -- each one is awaited to completion (and
+    so stops emitting ticks) before the next starts -- so one mapping
+    active at a time is enough to keep every label unique across a whole
+    ``run_search`` call. A raw label absent from the mapping passes through
+    unchanged, which is what keeps two-stage's own "Phase 0"/"Phase 1"/
+    "Phase 2" untouched wherever no relabelling is needed.
+    """
+
+    def __init__(self, on_progress: ProgressCallback | None):
+        self._on_progress = on_progress
+        self._relabel: dict[str, str] = {}
+
+    def retitle(self, relabel: dict[str, str]) -> None:
+        self._relabel = relabel
+
+    def __call__(self, progress: Progress) -> None:
+        if self._on_progress is None:
+            return
+        shown = self._relabel.get(progress.phase, progress.phase)
+        if shown != progress.phase:
+            progress = Progress(phase=shown, done=progress.done, total=progress.total,
+                                 best_total=progress.best_total)
+        self._on_progress(progress)
+
+
+def _attach_through_fares(
+    itineraries: list[Itinerary], fares: dict[tuple[str, str], Decimal]
+) -> list[Itinerary]:
+    """Attach each itinerary's through-fare baseline, keyed ``(dest, date)``.
+
+    Shared by ``_run_two_stage`` and ``_run_grid``, which otherwise
+    duplicated this verbatim (review finding, Minor).
+    """
+    return [itin.with_through_fare(fares.get((itin.dest, itin.date))) for itin in itineraries]
 
 
 @dataclass(frozen=True)
@@ -152,8 +234,10 @@ async def _cross_check(
                   onward_price=tagged[i].onward_price, discount=tagged[i].discount)
         for i in top_indices
     ]
+    relabel = _PhaseRelabeler(on_progress)
+    relabel.retitle({CONFIRM_PHASE: CROSS_CHECK_PHASE})
     fetcher = LegFetcher(secondary, concurrency=_CONCURRENCY, delay=_DELAY,
-                          cancel=cancel, on_progress=on_progress)
+                          cancel=cancel, on_progress=relabel)
     rechecked = await confirm(
         fetcher, candidates, origin=origin, trip_days=trip_days,
         hub_names=hub_names, dest_names=dest_names,
@@ -219,9 +303,7 @@ async def _run_two_stage(
         fetcher, itineraries, origin=origin, trip_days=trip_days,
         dates_limit=THROUGH_FARE_DATES, adults=adults, currency=currency,
     )
-    itineraries = [
-        itin.with_through_fare(fares.get((itin.dest, itin.date))) for itin in itineraries
-    ]
+    itineraries = _attach_through_fares(itineraries, fares)
 
     return (itineraries, grid,
             grid.parse_errors + fetcher.parse_errors,
@@ -241,10 +323,19 @@ async def _run_grid(
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
 ) -> tuple[list[Itinerary], None, int, int]:
-    """The four-phase grid fallback, plus the through-fare baseline."""
+    """The four-phase grid fallback, plus the through-fare baseline.
+
+    ``run_grid_search`` and ``through_fares`` share one ``LegFetcher`` (so
+    their error counters accumulate on one object, as in ``_run_two_stage``)
+    behind a ``_PhaseRelabeler``: ``run_grid_search`` itself reports its
+    onward leg as "Phase 2", so ``through_fares``' own hardcoded "Phase 2"
+    is relabelled to ``GRID_THROUGH_FARE_PHASE`` before it runs -- otherwise
+    a caller would see "Phase 2" finish, then restart at 0/M.
+    """
     _check_cancel(cancel)
+    relabel = _PhaseRelabeler(on_progress)
     fetcher = LegFetcher(provider, concurrency=_CONCURRENCY, delay=_DELAY,
-                          cancel=cancel, on_progress=on_progress)
+                          cancel=cancel, on_progress=relabel)
     itineraries = await run_grid_search(
         fetcher, origin=origin, dests=list(destinations), hubs=list(hubs),
         window=window, trip_days=trip_days, hub_names=hubs, dest_names=destinations,
@@ -253,13 +344,12 @@ async def _run_grid(
     )
 
     _check_cancel(cancel)
+    relabel.retitle({PHASE_THROUGH_FARE: GRID_THROUGH_FARE_PHASE})
     fares = await through_fares(
         fetcher, itineraries, origin=origin, trip_days=trip_days,
         dates_limit=THROUGH_FARE_DATES, adults=adults, currency=currency,
     )
-    itineraries = [
-        itin.with_through_fare(fares.get((itin.dest, itin.date))) for itin in itineraries
-    ]
+    itineraries = _attach_through_fares(itineraries, fares)
 
     return itineraries, None, fetcher.parse_errors, fetcher.fetch_errors
 
