@@ -25,10 +25,11 @@ from decimal import Decimal
 import pytest
 
 import config
+import engine.fetch as fetch_module
 import engine.orchestrator as orchestrator
 from engine.orchestrator import SearchResult, run_search
 from models import CancelToken, Progress, SearchCancelled, SearchWindow
-from providers.base import ProviderFetchError, ProviderParseError, RatedPrice
+from providers.base import ProviderError, ProviderFetchError, ProviderParseError, RatedPrice
 from tests.test_engine_fetch import FakeProvider, _offer
 
 
@@ -776,3 +777,148 @@ async def test_grid_strategy_is_exempt_from_the_window_limit(monkeypatch):
     )
 
     assert result.strategy == "grid"  # completed without raising
+
+
+# ── Review finding I3: concurrency/delay come from config, per provider ────
+#
+# KIWI_CONCURRENCY/KIWI_DELAY and MAX_CONCURRENCY/DEFAULT_DELAY used to have
+# no reader outside config.py -- this module hardcoded a flat
+# _CONCURRENCY=8/_DELAY=0.0 for every provider regardless. Worse for Google:
+# a Google-only deployment ran the grid fallback at 8-wide with zero
+# spacing, where Layer 1 used 4-wide with a 2.5s delay specifically to avoid
+# getting the scraper blocked.
+
+_BUDGET_KNOBS = ("MAX_CONCURRENCY", "DEFAULT_DELAY", "KIWI_CONCURRENCY", "KIWI_DELAY")
+
+
+def test_budget_knobs_match_configs_defaults():
+    for name in _BUDGET_KNOBS:
+        assert getattr(orchestrator, name) == getattr(config, name)
+
+
+def test_orchestrator_does_not_shadow_the_budget_knobs_with_its_own_literals():
+    """Same concern, same technique as test_orchestrator_does_not_shadow_the_
+    config_knobs_with_its_own_literals -- a hardcoded re-assignment here would
+    silently shadow the deployment knob."""
+    source = inspect.getsource(orchestrator)
+    for name in _BUDGET_KNOBS:
+        assert f"{name} = " not in source, f"{name} must be imported from config, not reassigned"
+    # The old flat constants this replaced must be genuinely gone from the
+    # module's actual code (not just its docstrings, which still explain the
+    # history for context) -- a caller must have no hardcoded value left to
+    # accidentally pick back up.
+    assert not any(
+        line.strip().startswith(("_CONCURRENCY = ", "_DELAY = ")) for line in source.splitlines()
+    )
+
+
+def test_budget_picks_kiwi_knobs_for_a_calendar_capable_provider():
+    assert orchestrator._budget(FakeCalendarProvider()) == (
+        config.KIWI_CONCURRENCY, config.KIWI_DELAY,
+    )
+
+
+def test_budget_picks_default_knobs_for_a_provider_without_a_calendar():
+    """The Google-shaped case: no price_calendar means the throttled budget,
+    not Kiwi's -- keyed on capability, never on provider.name."""
+    assert orchestrator._budget(FakeProvider()) == (
+        config.MAX_CONCURRENCY, config.DEFAULT_DELAY,
+    )
+
+
+def _spy_on_leg_fetcher_init(monkeypatch) -> list[tuple[int, float]]:
+    """Record every (concurrency, delay) a real LegFetcher is built with.
+
+    Spies on LegFetcher.__init__ directly (rather than monkeypatching
+    orchestrator's own reference to the class) so this holds regardless of
+    which internal call site constructs one.
+    """
+    seen: list[tuple[int, float]] = []
+    original_init = fetch_module.LegFetcher.__init__
+
+    def spy_init(self, provider, *, concurrency, delay, **kwargs):
+        seen.append((concurrency, delay))
+        original_init(self, provider, concurrency=concurrency, delay=delay, **kwargs)
+
+    monkeypatch.setattr(fetch_module.LegFetcher, "__init__", spy_init)
+    return seen
+
+
+async def test_grid_fetcher_actually_uses_the_configured_default_budget(monkeypatch):
+    """End-to-end: the grid path's real LegFetcher must be built from
+    whatever MAX_CONCURRENCY/DEFAULT_DELAY currently hold, not a hardcoded
+    8/0.0 -- delay forced to 0 here only so the test doesn't really sleep."""
+    _neutral_discount(monkeypatch)
+    monkeypatch.setattr(orchestrator, "MAX_CONCURRENCY", 7)
+    monkeypatch.setattr(orchestrator, "DEFAULT_DELAY", 0.0)
+    seen = _spy_on_leg_fetcher_init(monkeypatch)
+    provider = FakeProvider()  # no calendar -> grid strategy
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=provider,
+    )
+
+    assert seen == [(7, 0.0)]
+
+
+async def test_cross_check_against_a_non_calendar_secondary_uses_the_default_budget(
+    monkeypatch,
+):
+    """The exact scenario the finding calls out: PRIMARY_PROVIDER=kiwi with a
+    Google secondary must cross-check at Google's throttled budget, not
+    Kiwi's -- keyed on the secondary's own capability, not the primary's."""
+    _neutral_discount(monkeypatch)
+    monkeypatch.setattr(orchestrator, "KIWI_CONCURRENCY", 9)
+    monkeypatch.setattr(orchestrator, "KIWI_DELAY", 0.0)
+    monkeypatch.setattr(orchestrator, "MAX_CONCURRENCY", 2)
+    monkeypatch.setattr(orchestrator, "DEFAULT_DELAY", 0.0)
+    seen = _spy_on_leg_fetcher_init(monkeypatch)
+    primary = _one_hub_scenario()  # SupportsCalendar -- e.g. Kiwi
+    secondary = FakeProvider({
+        ("LPA", "MAD", "2026-10-01"): [_offer("25")],
+        ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+    })  # no calendar -- e.g. Google
+    monkeypatch.setattr(
+        orchestrator, "enabled_providers", lambda: {"primary": primary, "secondary": secondary},
+    )
+
+    await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=primary,
+    )
+
+    # First fetcher built is phase 1's (against the calendar-capable primary,
+    # Kiwi's budget); the cross-check's fetcher against the Google-shaped
+    # secondary must use the default one, not the primary's.
+    assert seen[0] == (9, 0.0)
+    assert seen[-1] == (2, 0.0)
+
+
+# ── Review finding I8: a bare ProviderError from the secondary is bounded ───
+
+
+async def test_cross_check_secondary_bare_provider_error_keeps_the_primary_result(
+    monkeypatch,
+):
+    """A secondary that cannot answer this kind of query at all (a bare
+    ProviderError, not a per-leg ProviderFetchError/ProviderParseError) must
+    not discard an already-complete, already-bookable primary result -- the
+    primary search deliberately lets the same exception abort the phase
+    (engine/fetch.py, engine/scan.py), but the cross-check is optional
+    corroboration of a result that already stands on its own."""
+    _neutral_discount(monkeypatch)
+    primary = _one_hub_scenario()
+    secondary = FakeProvider(error=ProviderError("cannot express this kind of query"))
+    monkeypatch.setattr(
+        orchestrator, "enabled_providers", lambda: {"primary": primary, "secondary": secondary},
+    )
+
+    result = await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=primary,
+    )
+
+    assert len(result.itineraries) == 1
+    assert result.itineraries[0].providers == (primary.name,)

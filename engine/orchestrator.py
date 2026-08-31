@@ -32,16 +32,29 @@ A sixth config value, MAX_WINDOW_DAYS, is enforced rather than merely read:
 provider, before phase 0 issues a single request (see ``run_search``'s own
 docstring). It is not applied to the grid strategy, which never consults a
 calendar and is not subject to the limit that value documents.
+
+Concurrency and per-worker delay are also config knobs, chosen per call
+rather than fixed once for the whole module: ``_budget`` reads
+KIWI_CONCURRENCY/KIWI_DELAY for a ``SupportsCalendar`` provider and
+MAX_CONCURRENCY/DEFAULT_DELAY for anything else (review finding I3 -- Kiwi
+tolerates far more load than scraping Google does, and the two must not
+share one budget). It is keyed on capability, the same way strategy
+selection is, never on a provider's ``name`` string.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 
 from config import (
+    DEFAULT_DELAY,
     DISCOUNT_AIRPORTS,
     DOMESTIC_DISCOUNT,
     FALLBACK_MAX_DATES,
+    KIWI_CONCURRENCY,
+    KIWI_DELAY,
+    MAX_CONCURRENCY,
     MAX_PER_DATE,
     MAX_PER_HUB,
     MAX_WINDOW_DAYS,
@@ -62,17 +75,32 @@ from models import (
     ProgressCallback,
     SearchWindow,
 )
-from providers.base import FlightProvider, SupportsCalendar
+from providers.base import FlightProvider, ProviderError, SupportsCalendar
 from providers.registry import enabled_providers, primary_provider
+
+logger = logging.getLogger(__name__)
 
 STRATEGY_TWO_STAGE = "two-stage"
 STRATEGY_GRID = "grid"
 
-# Not a Task-13 knob: LegFetcher/scan_calendars need *some* concurrency and
-# per-worker delay, and run_search's own signature takes neither as a
-# parameter. These match scan_calendars' own defaults.
-_CONCURRENCY = 8
-_DELAY = 0.0
+
+def _budget(provider: FlightProvider) -> tuple[int, float]:
+    """The (concurrency, delay) a fetcher against *provider* should use.
+
+    Review finding I3: this used to be a flat ``_CONCURRENCY = 8`` /
+    ``_DELAY = 0.0`` regardless of provider, which left KIWI_CONCURRENCY,
+    KIWI_DELAY, MAX_CONCURRENCY and DEFAULT_DELAY dead config -- and ran a
+    Google-only deployment's scraper at 8-wide with zero spacing, where
+    Layer 1 used 4-wide with a 2.5s delay specifically to avoid getting
+    blocked. Keyed on ``isinstance(provider, SupportsCalendar)``, the same
+    capability check strategy selection uses -- not on ``provider.name`` --
+    since that is what actually distinguishes "tolerates load" (Kiwi's API)
+    from "must be throttled" (scraping Google) in this codebase, and stays
+    correct even if a future calendar-capable provider isn't named "kiwi".
+    """
+    if isinstance(provider, SupportsCalendar):
+        return KIWI_CONCURRENCY, KIWI_DELAY
+    return MAX_CONCURRENCY, DEFAULT_DELAY
 
 # spec §5.7: only the cheapest few confirmed itineraries are cross-checked
 # against a second enabled provider -- doing it for the whole shortlist
@@ -222,6 +250,19 @@ async def _cross_check(
     An unconfirmed itinerary is skipped for cross-check purposes (there is
     nothing bookable yet to corroborate), but still gets tagged with the
     primary's name like every other result.
+
+    A bare ``ProviderError`` from the secondary's ``confirm`` call (review
+    finding I8) is caught here, logged, and treated as "the secondary could
+    not corroborate anything" -- unlike the primary search, where the same
+    exception is deliberately left to propagate and abort the phase (see
+    ``engine/fetch.py``'s and ``engine/scan.py``'s own comments). The
+    difference is what each call is *for*: the primary's result is the
+    search, and a misconfigured query there must not silently look like "no
+    flights found". The secondary's result here is optional corroboration of
+    an already-complete, already-bookable primary result -- discarding that
+    result because a second, non-essential provider cannot answer this kind
+    of query at all would throw away real, confirmed itineraries for a
+    capability gap that is not the primary's problem.
     """
     tagged = [itin.with_providers(provider.name) for itin in itineraries]
     if secondary is None or not tagged:
@@ -242,14 +283,23 @@ async def _cross_check(
     ]
     relabel = _PhaseRelabeler(on_progress)
     relabel.retitle({CONFIRM_PHASE: CROSS_CHECK_PHASE})
-    fetcher = LegFetcher(secondary, concurrency=_CONCURRENCY, delay=_DELAY,
+    concurrency, delay = _budget(secondary)
+    fetcher = LegFetcher(secondary, concurrency=concurrency, delay=delay,
                           cancel=cancel, on_progress=relabel)
-    rechecked = await confirm(
-        fetcher, candidates, origin=origin, trip_days=trip_days,
-        hub_names=hub_names, dest_names=dest_names,
-        discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
-        adults=adults, currency=currency,
-    )
+    try:
+        rechecked = await confirm(
+            fetcher, candidates, origin=origin, trip_days=trip_days,
+            hub_names=hub_names, dest_names=dest_names,
+            discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
+            adults=adults, currency=currency,
+        )
+    except ProviderError:
+        logger.warning(
+            "Cross-check against %s aborted (provider cannot answer this kind "
+            "of query); keeping the primary-only result.", secondary.name,
+        )
+        return tagged, fetcher.parse_errors, fetcher.fetch_errors
+
     both_confirmed = {
         (r.date, r.return_date, r.hub, r.dest) for r in rechecked if r.confirmed
     }
@@ -278,11 +328,12 @@ async def _run_two_stage(
     on_progress: ProgressCallback | None,
 ) -> tuple[list[Itinerary], CalendarGrid, int, int]:
     """Phase 0 -> 0b -> 1 -> 2, cancellable between each."""
+    concurrency, delay = _budget(provider)
     _check_cancel(cancel)
     grid = await scan_calendars(
         provider, origin=origin, hubs=list(hubs), dests=list(destinations),
         window=window, trip_days=trip_days, adults=adults, currency=currency,
-        concurrency=_CONCURRENCY, delay=_DELAY, cancel=cancel, on_progress=on_progress,
+        concurrency=concurrency, delay=delay, cancel=cancel, on_progress=on_progress,
     )
 
     _check_cancel(cancel)
@@ -295,7 +346,7 @@ async def _run_two_stage(
     )
 
     _check_cancel(cancel)
-    fetcher = LegFetcher(provider, concurrency=_CONCURRENCY, delay=_DELAY,
+    fetcher = LegFetcher(provider, concurrency=concurrency, delay=delay,
                           cancel=cancel, on_progress=on_progress)
     itineraries = await confirm(
         fetcher, shortlist, origin=origin, trip_days=trip_days,
@@ -345,9 +396,10 @@ async def _run_grid(
     arbitrary window to sample from) must have the grid path search those
     dates, not silently resample its own from the window instead.
     """
+    concurrency, delay = _budget(provider)
     _check_cancel(cancel)
     relabel = _PhaseRelabeler(on_progress)
-    fetcher = LegFetcher(provider, concurrency=_CONCURRENCY, delay=_DELAY,
+    fetcher = LegFetcher(provider, concurrency=concurrency, delay=delay,
                           cancel=cancel, on_progress=relabel)
     itineraries = await run_grid_search(
         fetcher, origin=origin, dests=list(destinations), hubs=list(hubs),
