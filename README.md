@@ -259,6 +259,7 @@ handlers/
   favorites.py          track / list / untrack routes
   history.py            view and re-run past searches
   utils.py              validation, HTML escaping, message chunking
+deploy/                 systemd units and the pull-based updater
 tests/                  the full suite runs offline; a network-marked drift guard runs separately
 ```
 
@@ -314,6 +315,125 @@ The parser depends on undocumented response shapes from both sources. The
 Google parser is pinned against a recorded HTML capture; the Kiwi client is
 pinned against recorded JSON, plus a network-marked drift guard that
 introspects the live schema and fails if a field the client reads has moved.
+
+## Deployment
+
+The bot runs as a systemd service under an unprivileged account, and updates
+itself from the deployment branch when you tell it to.
+
+### First install
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin stfbot
+sudo git clone https://github.com/jaimebg/split-ticket-finder.git /opt/split-ticket-finder
+cd /opt/split-ticket-finder
+
+sudo python3 -m venv .venv
+sudo .venv/bin/pip install -e .
+
+sudo cp .env.example .env
+# edit .env and drop in your BOT_TOKEN and OWNER_ID
+sudo chown -R stfbot:stfbot /opt/split-ticket-finder
+
+sudo cp deploy/split-ticket-finder.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now split-ticket-finder
+```
+
+The unit runs as the unprivileged `stfbot` user, restarts automatically on
+failure, and locks down the filesystem (`ProtectSystem=strict`) with a single
+writable exception for `/opt/split-ticket-finder` — where `flight_finder.db`
+(the default `DB_PATH`, resolved relative to `WorkingDirectory`) lives.
+
+### Updating a running deployment
+
+`deploy/update.sh` moves the server from the version it is running to the tip
+of the deployment branch. You run it when you want the update; nothing deploys
+on its own.
+
+Install it once, alongside the unit above:
+
+```bash
+sudo cp deploy/split-ticket-finder-update.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Then deploy whenever you like:
+
+```bash
+sudo systemctl start split-ticket-finder-update.service   # deploy now
+journalctl -u split-ticket-finder-update -n 20            # what it did
+```
+
+Each run fetches the branch and stops there unless there is something to do.
+When it finds a new commit it checks that **the commit's CI has passed**,
+fast-forwards to it, reinstalls the package, and restarts the bot — in that
+order, so a red build never reaches the server.
+
+It is deliberately conservative and **fails closed**. An unreachable GitHub
+API, a commit with no CI results, a red build, or a checkout that has diverged
+locally all leave the running version alone rather than guessing. A run that
+finds nothing new prints nothing at all, so the journal only ever contains real
+deployments.
+
+Because the server pulls, it never accepts an inbound connection for
+deployment and GitHub holds no credentials for it.
+
+#### Making it automatic
+
+A timer ships alongside the service and is **not enabled**. Enabling it turns
+the manual step above into a check every five minutes:
+
+```bash
+sudo cp deploy/split-ticket-finder-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now split-ticket-finder-update.timer
+
+systemctl list-timers split-ticket-finder-update.timer          # when it next runs
+sudo systemctl disable --now split-ticket-finder-update.timer   # back to manual
+```
+
+Change the interval by editing `OnUnitActiveSec` in the timer file. Nothing
+else differs: the timer runs exactly the same service, with the same safety
+rules.
+
+#### Configuration
+
+Tune either mode with a drop-in (`sudo systemctl edit
+split-ticket-finder-update.service`):
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `REPO_DIR` | Checkout to update | `/opt/split-ticket-finder` |
+| `BRANCH` | Branch to deploy | `main` |
+| `SERVICE` | Unit to restart | `split-ticket-finder` |
+| `RUN_AS` | Account owning the checkout | `stfbot` |
+| `API_REPO` | `owner/name` used for the CI lookup | `jaimebg/split-ticket-finder` |
+| `REQUIRE_GREEN_CI` | Set to `0` to deploy without consulting CI | `1` |
+
+The updater runs as root so it can restart the unit, and drops to `RUN_AS` for
+every write to the checkout — git refuses to work in a repository owned by
+another user, so all of its commands go through that account.
+
+#### Rolling back
+
+There is no rollback command; `git` is the rollback. To get a bad release off
+the server right now:
+
+```bash
+sudo -u stfbot git -C /opt/split-ticket-finder checkout <good-commit>
+sudo systemctl restart split-ticket-finder
+```
+
+**This is a stopgap, not a pin.** The checkout is left detached at an ancestor
+of the branch, and `git merge --ff-only` advances an ancestor happily — so the
+next update run rolls the server forward onto the bad commit again. Use the
+pause to fix forward: revert the offending commit on the branch and deploy
+that.
+
+> **The database is not backed up before an update.** Migrations run in place,
+> and `flight_finder.db` holds your tracked routes and search history — copy it
+> somewhere safe before a release you have doubts about.
 
 ## Limitations
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=Split Ticket Finder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stfbot
+WorkingDirectory=/opt/split-ticket-finder
+EnvironmentFile=/opt/split-ticket-finder/.env
+ExecStart=/opt/split-ticket-finder/.venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/split-ticket-finder
+
+[Install]
+WantedBy=multi-user.target

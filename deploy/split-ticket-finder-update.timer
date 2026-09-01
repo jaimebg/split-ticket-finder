@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for split-ticket-finder updates every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+# Spread the load so every host running this bot does not hit GitHub at the
+# same instant.
+RandomizedDelaySec=60
+# Run a missed check after downtime instead of waiting for the next interval.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

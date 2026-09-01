@@ -1,0 +1,16 @@
+[Unit]
+Description=Update split-ticket-finder from its deployment branch
+Documentation=https://github.com/jaimebg/split-ticket-finder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: it needs to restart the bot unit, and drops to the service
+# account itself for every write to the repository (see update.sh).
+ExecStart=/opt/split-ticket-finder/deploy/update.sh
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/split-ticket-finder
