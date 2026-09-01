@@ -192,3 +192,20 @@ def test_render_describes_each_date_mode_in_its_own_terms(mode, expected):
                        picked_days=("2026-10-03", "2026-10-11"))
     text, _ = d.render()
     assert expected in text
+
+
+def test_the_draft_and_dates_modules_stay_telegram_free():
+    """The boundary that lets these two modules be tested without a bot.
+
+    Run in a subprocess because the parent pytest process has already
+    imported telegram via other test modules, so an in-process
+    sys.modules check would always pass and assert nothing.
+    """
+    import subprocess
+    import sys
+    code = (
+        "import sys, handlers.search.draft, handlers.search.dates; "
+        "bad = sorted(m for m in sys.modules if m.startswith('telegram')); "
+        "assert not bad, bad"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
