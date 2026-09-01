@@ -174,6 +174,11 @@ KIWI_PARTNER = os.getenv("KIWI_PARTNER", "skypicker").strip() or "skypicker"
 # ── Database ─────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "flight_finder.db")
 
+# Autocomplete results are cached so repeated terms cost no request (spec
+# §7.1). The default is 30 days: airports do not move, so this TTL exists
+# for renames and re-codings, not for freshness.
+PLACE_CACHE_TTL_HOURS = _int_env("PLACE_CACHE_TTL_HOURS", 720, lo=1)
+
 # ── Alert config ─────────────────────────────────────────
 ALERT_INTERVAL_HOURS = _int_env("ALERT_INTERVAL_HOURS", 6, lo=1)
 PRICE_DROP_THRESHOLD = _float_env("PRICE_DROP_THRESHOLD", 0.10, lo=0.0, hi=1.0)

@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import aiosqlite
 
-from config import DB_PATH
+from config import DB_PATH, PLACE_CACHE_TTL_HOURS
 
 # ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,12 @@ CREATE TABLE IF NOT EXISTS price_checks (
     checked_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     best_price   REAL,
     route_detail TEXT                -- JSON blob
+);
+
+CREATE TABLE IF NOT EXISTS place_cache (
+    term      TEXT PRIMARY KEY,   -- casefolded, whitespace-collapsed
+    places    TEXT NOT NULL,      -- JSON list of place dicts
+    cached_at TEXT NOT NULL
 );
 """
 
@@ -362,3 +368,58 @@ async def add_price_check(
         )
         await db.commit()
         return cursor.lastrowid
+
+
+# ── Place cache (spec §7.1) ──────────────────────────────────────────────────
+
+
+def normalize_term(term: str) -> str:
+    """The cache key for a free-text place search.
+
+    Casefolded and whitespace-collapsed so "  TOKYO  ", "Tokyo" and "tokyo"
+    are one entry rather than three. str.split() with no argument collapses
+    runs of any whitespace, which also handles a pasted term containing a
+    tab or a newline.
+    """
+    return " ".join(term.split()).casefold()
+
+
+async def get_cached_places(term: str) -> list[dict] | None:
+    """Cached places for *term*, or None if absent or past the TTL.
+
+    Expiry reads as a miss rather than as stale data: the caller's only
+    correct response to either is to ask the provider again.
+
+    PLACE_CACHE_TTL_HOURS is read through this module's own global rather
+    than captured at import, so a test can monkeypatch it -- the same
+    reason engine/orchestrator.py's _discount() re-reads DOMESTIC_DISCOUNT.
+    """
+    key = normalize_term(term)
+    async with _connect() as db:
+        cursor = await db.execute(
+            "SELECT places, cached_at FROM place_cache WHERE term = ?", (key,)
+        )
+        row = await cursor.fetchone()
+
+    if row is None:
+        return None
+
+    cached_at = datetime.strptime(row[1], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    age = datetime.now(timezone.utc) - cached_at
+    if age > timedelta(hours=PLACE_CACHE_TTL_HOURS):
+        return None
+
+    return json.loads(row[0])
+
+
+async def put_cached_places(term: str, places: list[dict]) -> None:
+    """Cache *places* under *term*, replacing any existing entry."""
+    async with _connect() as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO place_cache (term, places, cached_at) "
+            "VALUES (?, ?, ?)",
+            (normalize_term(term), _json(places), _now()),
+        )
+        await db.commit()

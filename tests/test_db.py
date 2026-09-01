@@ -13,6 +13,8 @@ import json
 import sqlite3
 from decimal import Decimal
 
+import pytest
+
 import db as db_module
 from db import (
     add_favorite,
@@ -374,3 +376,59 @@ async def test_init_db_is_idempotent_on_a_fresh_database(temp_db):
     """
     await init_db()
     await init_db()
+
+
+# ── place_cache (spec §7.1) ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_place_cache_round_trips_a_term(temp_db):
+    places = [{"code": "NRT", "name": "Narita", "city": "Tokyo",
+               "country": "Japan", "place_id": "Airport:NRT"}]
+
+    await db_module.put_cached_places("Tokyo", places)
+
+    assert await db_module.get_cached_places("Tokyo") == places
+
+
+@pytest.mark.asyncio
+async def test_place_cache_misses_an_unknown_term(temp_db):
+    assert await db_module.get_cached_places("Atlantis") is None
+
+
+@pytest.mark.asyncio
+async def test_place_cache_normalizes_case_and_whitespace(temp_db):
+    """'  TOKYO  ' and 'tokyo' are one search, not three cache entries."""
+    places = [{"code": "NRT", "name": "Narita", "city": "Tokyo",
+               "country": "Japan", "place_id": "Airport:NRT"}]
+
+    await db_module.put_cached_places("  TOKYO  ", places)
+
+    assert await db_module.get_cached_places("tokyo") == places
+    assert await db_module.get_cached_places("Tokyo") == places
+
+
+@pytest.mark.asyncio
+async def test_place_cache_expires_past_the_ttl(temp_db, monkeypatch):
+    """An expired row reads as a miss, not as stale data.
+
+    The TTL is read fresh inside the accessor so this monkeypatch takes
+    effect -- the same reason engine/orchestrator.py's _discount() reads
+    DOMESTIC_DISCOUNT through the module attribute rather than binding it
+    at import.
+    """
+    await db_module.put_cached_places("Tokyo", [{"code": "NRT", "name": "Narita",
+                                          "city": "Tokyo", "country": "Japan",
+                                          "place_id": "Airport:NRT"}])
+    monkeypatch.setattr(db_module, "PLACE_CACHE_TTL_HOURS", 0)
+
+    assert await db_module.get_cached_places("Tokyo") is None
+
+
+@pytest.mark.asyncio
+async def test_place_cache_overwrites_rather_than_duplicating(temp_db):
+    """term is the primary key; a re-resolve replaces, it does not conflict."""
+    await db_module.put_cached_places("Tokyo", [{"code": "NRT"}])
+    await db_module.put_cached_places("Tokyo", [{"code": "HND"}])
+
+    assert await db_module.get_cached_places("Tokyo") == [{"code": "HND"}]
