@@ -30,10 +30,12 @@ from telegram.ext import ConversationHandler
 
 import handlers.start as start_module
 from handlers.search import builder
-from handlers.search.builder import render_anchor
+from handlers.search.builder import _current_month, render_anchor
+from handlers.search.dates import shift_month
 from handlers.search.draft import (
     AWAIT_DEST,
     AWAIT_HUBS,
+    AWAIT_TRIP_DAYS,
     MAX_DESTINATIONS,
     SCREEN_DATES,
     SCREEN_DEST,
@@ -167,16 +169,19 @@ def _owner(monkeypatch):
 class FakeQuery:
     """Just enough of telegram.CallbackQuery for the handlers under test."""
 
-    def __init__(self, data: str):
+    def __init__(self, data: str, *, edit_error=None):
         self.data = data
         self.answers: list[tuple[str, bool]] = []
         self.edits: list[str] = []
+        self._edit_error = edit_error
 
     async def answer(self, text: str = "", show_alert: bool = False):
         self.answers.append((text, show_alert))
 
     async def edit_message_text(self, text, **kwargs):
         self.edits.append(text)
+        if self._edit_error:
+            raise self._edit_error
 
 
 class FakeMessage:
@@ -215,9 +220,9 @@ def _context(bot: FakeBot | None = None) -> SimpleNamespace:
     return SimpleNamespace(bot=bot, user_data={}, application=FakeApplication(bot))
 
 
-def _cb_update(data: str, *, chat_id: int = 1) -> SimpleNamespace:
+def _cb_update(data: str, *, chat_id: int = 1, edit_error=None) -> SimpleNamespace:
     return SimpleNamespace(
-        callback_query=FakeQuery(data),
+        callback_query=FakeQuery(data, edit_error=edit_error),
         effective_user=SimpleNamespace(id=_OWNER_ID),
         effective_chat=SimpleNamespace(id=chat_id),
     )
@@ -406,6 +411,31 @@ async def test_go_schedules_run_and_report_with_the_draft_s_params(monkeypatch):
     assert context.user_data == {}, "the draft must not survive a launched search"
 
 
+async def test_go_still_schedules_the_search_when_the_edit_fails(monkeypatch):
+    """FIX 3: query.answer() has already fired, so an edit failure here must
+    not be the reason a search is never launched -- every other render on
+    this branch absorbs BadRequest/Forbidden through render_anchor; go()
+    must not be the one bare exception to that."""
+    calls = []
+
+    async def fake_run_and_report(bot, chat_id, params):
+        calls.append((bot, chat_id, params))
+
+    monkeypatch.setattr(builder, "run_and_report", fake_run_and_report)
+
+    context = _context()
+    draft = _draft(**_READY_DRAFT_KWARGS)
+    _set_draft(context, draft)
+    update = _cb_update("go", chat_id=777, edit_error=BadRequest("message to edit not found"))
+
+    result = await builder.go(update, context)
+
+    assert result == ConversationHandler.END
+    assert len(context.application.scheduled) == 1
+    await context.application.scheduled[0]
+    assert calls, "the search must still be scheduled and run"
+
+
 # ── place_tap's MAX_DESTINATIONS cap ─────────────────────────────────────────
 
 
@@ -466,6 +496,45 @@ async def test_on_text_forces_a_resend_when_the_delete_is_refused():
     assert context.user_data[builder._ANCHOR] != 42
 
 
+# ── _handle_trip_text's error path (FIX 6) ───────────────────────────────────
+
+
+async def test_bad_trip_days_input_edits_the_anchor_in_place():
+    context = _context()
+    context.user_data[builder._ANCHOR] = 42
+    _set_draft(context, _draft(awaiting=AWAIT_TRIP_DAYS))
+
+    await builder.on_text(_text_update("not a number"), context)
+
+    assert len(context.bot.edits) == 1
+    assert not context.bot.sends
+    assert context.user_data[builder._ANCHOR] == 42
+    body = context.bot.edits[0]["text"]
+    assert "is not a number" in body
+    assert "How long is the trip?" in body
+
+
+async def test_bad_trip_days_input_leaves_exactly_one_anchor_when_the_delete_is_refused():
+    """FIX 6: on_text has already set _ANCHOR to None by the time this path
+    runs (the delete was refused). The old bare send_message never touched
+    the anchor, so the next _show would create a *second* panel while the
+    first kept a live Back button. Routing through render_anchor here
+    resends and re-anchors exactly like every other screen does, leaving
+    exactly one live panel."""
+    context = _context()
+    context.user_data[builder._ANCHOR] = 42
+    _set_draft(context, _draft(awaiting=AWAIT_TRIP_DAYS))
+    update = _text_update("not a number", delete_error=BadRequest("no rights"))
+
+    await builder.on_text(update, context)
+
+    assert len(context.bot.sends) == 1, "a refused delete must force a resend, not a loose message"
+    assert not context.bot.edits
+    assert context.user_data[builder._ANCHOR] is not None
+    assert context.user_data[builder._ANCHOR] != 42
+    assert "is not a number" in context.bot.sends[0]["text"]
+
+
 # ── _load_ratings's cache key and gating ─────────────────────────────────────
 
 
@@ -524,11 +593,14 @@ async def test_load_ratings_does_nothing_without_a_calendar_capable_provider(mon
     assert builder._RATINGS not in context.user_data
 
 
-# A month far enough in the future that it can never fall into
-# month_rows's "past day" branch, whatever the real wall-clock date is when
-# this suite runs -- unlike test_search_dates.py's pure functions, _today()
-# here is not injectable.
-_FUTURE_YEAR, _FUTURE_MONTH = 2030, 1
+# A month that is always both future (never falls into month_rows's "past
+# day" branch) and within the MAX_DAYS_AHEAD booking horizon, whatever the
+# real wall-clock date is when this suite runs -- unlike test_search_dates.py's
+# pure functions, _today() here is not injectable. A month fixed far away
+# (the old 2030-01) would eventually drift past the horizon and make every
+# day in it a non-tappable "beyond horizon" cell, so this is computed off
+# the real "today" instead of hardcoded.
+_FUTURE_YEAR, _FUTURE_MONTH = shift_month(*_current_month(), 1)
 _FUTURE_RATED_DAY = f"{_FUTURE_YEAR:04d}-{_FUTURE_MONTH:02d}-05"
 
 
@@ -555,6 +627,10 @@ async def test_load_ratings_caches_under_the_key_dates_screen_reads(monkeypatch)
 
 
 async def test_load_ratings_swallows_a_provider_error_and_renders_uncoloured(monkeypatch):
+    """FIX 2: a ProviderError must not be cached as `{}` -- that would look
+    indistinguishable from a provider that legitimately returned an empty
+    table, and would poison the cache against a later retry (covered by
+    test_load_ratings_failure_does_not_poison_the_cache below)."""
     provider = _FakeCalendarProvider(error=ProviderError("boom"))
     monkeypatch.setattr(builder, "primary_provider", lambda: provider)
     context = _context()
@@ -564,8 +640,70 @@ async def test_load_ratings_swallows_a_provider_error_and_renders_uncoloured(mon
     await builder._load_ratings(context, draft)  # must not raise
 
     key = f"{draft.dest_codes[0]}:{_FUTURE_YEAR}-{_FUTURE_MONTH}"
-    assert context.user_data[builder._RATINGS][key] == {}
+    assert context.user_data[builder._RATINGS][key] is builder._RATINGS_FAILED
 
-    _, rows = builder._dates_screen(context, draft)
+    text, rows = builder._dates_screen(context, draft)
     labels = [b.label for row in rows for b in row]
     assert not any("🟢" in lbl or "🔴" in lbl or "🟡" in lbl for lbl in labels)
+    assert "unavailable" in text.lower()
+
+
+async def test_failed_calendar_caption_differs_from_no_provider_and_empty_success(monkeypatch):
+    """FIX 2's whole point: three genuinely different situations -- no
+    calendar signal configured, a signal that failed just now, and a
+    signal that succeeded but had nothing to say -- must not render the
+    same caption."""
+    draft = _draft(destinations=(("NRT", "Tokyo"),))
+
+    # No destination/provider at all: never attempted.
+    monkeypatch.setattr(builder, "primary_provider", lambda: _FakeNoCalendarProvider())
+    context = _context()
+    context.user_data[builder._MONTH] = (_FUTURE_YEAR, _FUTURE_MONTH)
+    await builder._load_ratings(context, draft)
+    no_signal_text, _ = builder._dates_screen(context, draft)
+
+    # Succeeded, but the table came back empty.
+    empty_provider = _FakeCalendarProvider(table={})
+    monkeypatch.setattr(builder, "primary_provider", lambda: empty_provider)
+    context2 = _context()
+    context2.user_data[builder._MONTH] = (_FUTURE_YEAR, _FUTURE_MONTH)
+    await builder._load_ratings(context2, draft)
+    empty_success_text, _ = builder._dates_screen(context2, draft)
+
+    # Failed just now.
+    failing_provider = _FakeCalendarProvider(error=ProviderError("boom"))
+    monkeypatch.setattr(builder, "primary_provider", lambda: failing_provider)
+    context3 = _context()
+    context3.user_data[builder._MONTH] = (_FUTURE_YEAR, _FUTURE_MONTH)
+    await builder._load_ratings(context3, draft)
+    failed_text, _ = builder._dates_screen(context3, draft)
+
+    assert len({no_signal_text, empty_success_text, failed_text}) == 3
+    assert "unavailable" in failed_text.lower()
+    assert "direct-fare signal" not in failed_text.lower()
+    assert "direct-fare signal" in empty_success_text.lower()
+    assert "direct-fare signal" not in no_signal_text.lower()
+
+
+async def test_load_ratings_failure_does_not_poison_the_cache(monkeypatch):
+    """Caching a failure as `{}` (the old bug) would leave the grid
+    uncoloured for the life of the draft even after the outage clears. The
+    very next visit -- no fresh draft required -- must retry."""
+    provider = _FakeCalendarProvider(error=ProviderError("boom"))
+    monkeypatch.setattr(builder, "primary_provider", lambda: provider)
+    context = _context()
+    context.user_data[builder._MONTH] = (_FUTURE_YEAR, _FUTURE_MONTH)
+    draft = _draft(destinations=(("NRT", "Tokyo"),))
+
+    await builder._load_ratings(context, draft)
+    key = f"{draft.dest_codes[0]}:{_FUTURE_YEAR}-{_FUTURE_MONTH}"
+    assert context.user_data[builder._RATINGS][key] is builder._RATINGS_FAILED
+
+    # The outage clears.
+    provider.error = None
+    provider.table = {_FUTURE_RATED_DAY: RatedPrice(Decimal("100"), "CHEAP")}
+
+    await builder._load_ratings(context, draft)
+
+    assert context.user_data[builder._RATINGS][key] == {_FUTURE_RATED_DAY: "CHEAP"}
+    assert len(provider.calls) == 2, "the second visit must hit the provider again"

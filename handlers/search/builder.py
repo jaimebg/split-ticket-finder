@@ -62,6 +62,12 @@ _RATINGS = "ratings"
 _RESULTS = "results"
 _TERM = "term"
 
+# Sentinel stored in the ratings cache for a failed fetch -- distinguishable
+# from `{}`, a legitimately empty-but-successful result. Kept out of the
+# cache's normal value space (a dict of day -> rating string) so `is` alone
+# tells the two apart with no ambiguity.
+_RATINGS_FAILED = object()
+
 _TRIP_PRESETS = (7, 10, 14, 21)
 
 
@@ -168,10 +174,13 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def _dates_screen(context, draft: SearchDraft) -> tuple[str, Rows]:
     year, month = context.user_data.get(_MONTH, _current_month())
     dest = draft.dest_codes[0] if draft.destinations else None
-    ratings = context.user_data.get(_RATINGS, {}).get(f"{dest}:{year}-{month}")
+    cached = context.user_data.get(_RATINGS, {}).get(f"{dest}:{year}-{month}")
+    failed = cached is _RATINGS_FAILED
+    ratings = None if failed else cached
     rows = dates_mod.month_rows(year, month, draft=draft, today=_today(),
                                 ratings=ratings)
-    return dates_mod.caption(draft, dest_code=dest if ratings else None), rows
+    dest_code = dest if (cached is not None and not failed) else None
+    return dates_mod.caption(draft, dest_code=dest_code, signal_failed=failed), rows
 
 
 def _current_month() -> tuple[int, int]:
@@ -189,6 +198,20 @@ def _trip_screen() -> tuple[str, Rows]:
     ]
     return ("<b>One-way or round-trip?</b>\n\n"
             "For a round trip, pick how long the trip lasts.", rows)
+
+
+def _trip_days_prompt(error: str | None = None) -> tuple[str, Rows]:
+    """The custom-trip-days prompt, optionally showing a rejected input.
+
+    *error* is a ValidationError's already-escaped message (parse_positive_int
+    builds it with esc()), so it is safe to interpolate as-is.
+    """
+    text = (f"<b>How long is the trip?</b>\n\nSend a number of days "
+            f"(1–{MAX_TRIP_DAYS}).")
+    if error:
+        text += f"\n\n⚠️ {error}"
+    rows: Rows = [[Button("⬅️ Back", "back")]]
+    return text, rows
 
 
 # ── Entry and exit ───────────────────────────────────────────────────────────
@@ -255,9 +278,14 @@ async def edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def _load_ratings(context, draft: SearchDraft) -> None:
     """Fetch the §6.4 direct-fare signal for the visible month, if possible.
 
-    Silent on failure by design: the colours are a decoration and the grid
-    renders uncoloured without them. Letting a ProviderError reach the user
-    here would break a working picker over an optional hint.
+    A ProviderError is not silent: _dates_screen shows a one-line note
+    that the signal is unavailable rather than rendering identically to a
+    deployment with no calendar signal at all -- a decoration must not
+    break the picker, but breaking silently is still breaking. The failure
+    is recorded under `_RATINGS_FAILED`, distinguishable from a
+    successful-but-empty `{}`, and specifically NOT treated as a cache hit
+    below -- so it does not poison the cache for the life of the draft;
+    the next visit to this month tries the provider again.
     """
     if not draft.destinations:
         return
@@ -269,7 +297,7 @@ async def _load_ratings(context, draft: SearchDraft) -> None:
     dest = draft.dest_codes[0]
     key = f"{dest}:{year}-{month}"
     cache = context.user_data.setdefault(_RATINGS, {})
-    if key in cache:
+    if key in cache and cache[key] is not _RATINGS_FAILED:
         return
 
     import calendar as _cal
@@ -285,9 +313,9 @@ async def _load_ratings(context, draft: SearchDraft) -> None:
             adults=draft.adults, currency=draft.currency,
         ))
     except ProviderError as exc:
-        logger.info("No date ratings for %s (%s) — rendering uncoloured.",
+        logger.info("No date ratings for %s (%s) — signal unavailable this visit.",
                     dest, exc)
-        cache[key] = {}
+        cache[key] = _RATINGS_FAILED
         return
 
     cache[key] = {day: rated.rating for day, rated in table.items()}
@@ -358,9 +386,7 @@ async def trip_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     if choice == "custom":
         _store(context, _draft_of(context).with_(awaiting=AWAIT_TRIP_DAYS))
-        text = (f"<b>How long is the trip?</b>\n\nSend a number of days "
-                f"(1–{MAX_TRIP_DAYS}).")
-        rows: Rows = [[Button("⬅️ Back", "back")]]
+        text, rows = _trip_days_prompt()
         live = await render_anchor(context.bot, update.effective_chat.id,
                                    context.user_data.get(_ANCHOR), text, rows)
         context.user_data[_ANCHOR] = live
@@ -459,7 +485,17 @@ async def _handle_trip_text(update, context, text: str) -> int:
     try:
         days = parse_positive_int(text, field="days", maximum=MAX_TRIP_DAYS)
     except ValidationError as exc:
-        await update.effective_chat.send_message(str(exc), parse_mode="HTML")
+        # A loose chat message here (the old behaviour) leaves the anchor
+        # unedited. That is merely stale when the delete above succeeded,
+        # but when it was refused on_text has already set _ANCHOR to None,
+        # and nothing else would resend it -- the next _show would then
+        # create a *second* panel while this one keeps a live Back button.
+        # Routing through render_anchor is what every other screen does,
+        # and it self-heals a missing/refused anchor the same way.
+        body, rows = _trip_days_prompt(error=str(exc))
+        live = await render_anchor(context.bot, update.effective_chat.id,
+                                   context.user_data.get(_ANCHOR), body, rows)
+        context.user_data[_ANCHOR] = live
         return BUILDING
 
     _store(context, _draft_of(context).with_(trip_days=days,
@@ -516,7 +552,16 @@ async def go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return BUILDING
 
     await query.answer()
-    await query.edit_message_text("On it — I'll message you when it's done.")
+    try:
+        await query.edit_message_text("On it — I'll message you when it's done.")
+    except (BadRequest, Forbidden) as exc:
+        # Every other render on this branch goes through render_anchor, which
+        # absorbs exactly these and resends. This edit has no keyboard to
+        # rebuild, so a bare log line is enough -- but it must not stop the
+        # search from being scheduled below. query.answer() has already
+        # fired, so a swallowed exception here is the only thing standing
+        # between "spinner stops" and "the search actually runs."
+        logger.info("Could not edit the anchor before launching the search (%s).", exc)
 
     context.application.create_task(
         run_and_report(context.application.bot, update.effective_chat.id,
