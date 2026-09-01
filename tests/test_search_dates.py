@@ -15,6 +15,7 @@ from handlers.search.dates import (
     caption,
     month_rows,
     shift_month,
+    switch_mode,
 )
 from handlers.search.draft import MODE_DAYS, MODE_WINDOW, SearchDraft
 
@@ -219,13 +220,29 @@ def test_a_preset_switches_back_to_window_mode():
 # ── Mode switching ───────────────────────────────────────────────────────────
 
 
-def test_switching_modes_clears_the_other_modes_selection():
+def test_switch_mode_to_days_clears_the_window():
     """A three-day pick is not a window, and guessing which was meant is
     worse than asking again."""
-    d = _draft(window_start="2026-10-01", window_end="2026-10-10")
-    rows = month_rows(2026, 10, draft=d, today=TODAY)
+    d = switch_mode(
+        _draft(window_start="2026-10-01", window_end="2026-10-10"), MODE_DAYS
+    )
 
-    assert "dm:days" in _data(rows)
+    assert d.date_mode == MODE_DAYS
+    assert d.window_start is None
+    assert d.window_end is None
+
+
+def test_switch_mode_to_window_clears_the_picked_days():
+    """A window is not a set of individual days, and guessing which was
+    meant is worse than asking again."""
+    d = switch_mode(
+        _draft(date_mode=MODE_DAYS,
+               picked_days=("2026-10-03", "2026-10-10", "2026-10-17")),
+        MODE_WINDOW,
+    )
+
+    assert d.date_mode == MODE_WINDOW
+    assert d.picked_days == ()
 
 
 # ── Ratings (spec §6.4) ──────────────────────────────────────────────────────
