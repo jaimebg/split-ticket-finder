@@ -21,6 +21,7 @@ from datetime import datetime
 
 from config import MAX_WINDOW_DAYS
 from handlers.search.draft import MODE_DAYS, MODE_WINDOW, Button, Rows, SearchDraft
+from handlers.utils import MAX_DAYS_AHEAD, esc
 from models import SearchWindow, add_days
 
 _ISO = "%Y-%m-%d"
@@ -66,6 +67,24 @@ def _too_long(a: str, b: str) -> str | None:
     return None
 
 
+def _horizon(today: str) -> str:
+    """The last bookable date -- MAX_DAYS_AHEAD from *today*, inclusive."""
+    return add_days(today, MAX_DAYS_AHEAD)
+
+
+def _too_far(date: str, today: str) -> str | None:
+    """An alert string if *date* is beyond the booking horizon, else None.
+
+    Mirrors handlers.utils.parse_date's old ceiling -- the new month grid
+    is the only date entry point now that Task 7 deleted that function's
+    call sites, so the bound has to hold here or it holds nowhere.
+    """
+    if date > _horizon(today):
+        return (f"That's more than {MAX_DAYS_AHEAD} days away — airlines "
+                "rarely publish fares that far ahead.")
+    return None
+
+
 # ── Selection ────────────────────────────────────────────────────────────────
 
 def apply_day_tap(
@@ -80,6 +99,10 @@ def apply_day_tap(
     """
     if date < today:
         return draft, None
+
+    alert = _too_far(date, today)
+    if alert:
+        return draft, alert
 
     if draft.date_mode == MODE_DAYS:
         picked = set(draft.picked_days)
@@ -115,7 +138,12 @@ def apply_preset(draft: SearchDraft, preset: str, *, today: str) -> SearchDraft:
     if preset == "month":
         first = datetime.strptime(today, _ISO)
         last_day = calendar.monthrange(first.year, first.month)[1]
-        end = first.replace(day=last_day).strftime(_ISO)
+        month_end = first.replace(day=last_day).strftime(_ISO)
+        # Clamp exactly like the "30"/"90" branches below -- an operator-set
+        # MAX_WINDOW_DAYS can be shorter than the days left in the month, and
+        # an uncapped tap here would be refused later by run_search instead
+        # of at the tap, the same failure I6 exists to avoid.
+        end = min(month_end, add_days(today, MAX_WINDOW_DAYS - 1))
     else:
         # Inclusive of both endpoints, so "next 30" is today plus 29.
         end = add_days(today, min(int(preset), MAX_WINDOW_DAYS) - 1)
@@ -173,6 +201,7 @@ def month_rows(
     also what a ProviderError falls back to. A decoration must not break
     the picker.
     """
+    horizon = _horizon(today)
     prev_y, prev_m = shift_month(year, month, -1)
     next_y, next_m = shift_month(year, month, 1)
     rows: Rows = [
@@ -189,7 +218,7 @@ def month_rows(
                 row.append(Button(" ", NOOP))
                 continue
             date = f"{year:04d}-{month:02d}-{day:02d}"
-            if date < today:
+            if date < today or date > horizon:
                 row.append(Button("·", NOOP))
                 continue
             row.append(Button(_cell_label(date, day, draft, ratings), f"d:{date}"))
@@ -209,13 +238,20 @@ def month_rows(
     return rows
 
 
-def caption(draft: SearchDraft, dest_code: str | None = None) -> str:
+def caption(draft: SearchDraft, dest_code: str | None = None, *,
+           signal_failed: bool = False) -> str:
     """The text above the grid.
 
     §6.4 requires the colours be labelled a *direct-fare signal* and the
     destination they came from be named: they are the through-fare shape
     for one destination, not the split, and not a saving. The results
     screen's strip is the version worth acting on.
+
+    *signal_failed* covers the case a plain *dest_code* can't distinguish:
+    a ProviderError must not render byte-identical to a deployment with no
+    calendar signal configured at all, or to a provider that legitimately
+    returned an empty table -- a decoration must not break the picker, but
+    breaking silently is still breaking.
     """
     if draft.date_mode == MODE_DAYS:
         n = len(draft.picked_days)
@@ -229,9 +265,11 @@ def caption(draft: SearchDraft, dest_code: str | None = None) -> str:
         state = "Tap a start date."
 
     lines = ["<b>When?</b>", state]
-    if dest_code:
+    if signal_failed:
+        lines.append("<i>Price signal unavailable right now.</i>")
+    elif dest_code:
         lines.append(
-            f"<i>Colours: direct-fare signal · {draft.origin}→{dest_code}. "
+            f"<i>Colours: direct-fare signal · {esc(draft.origin)}→{esc(dest_code)}. "
             "Not the split price.</i>"
         )
     return "\n".join(lines)

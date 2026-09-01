@@ -7,6 +7,7 @@ module imports no telegram.
 """
 from __future__ import annotations
 
+import handlers.search.dates as dates_module
 from config import MAX_WINDOW_DAYS
 from handlers.search.dates import (
     RATING_MARKS,
@@ -209,6 +210,18 @@ def test_this_month_runs_from_today_to_the_month_end():
     assert d.window_end == "2026-10-31"
 
 
+def test_month_preset_is_clamped_to_a_low_max_window_days(monkeypatch):
+    """FIX 7: the "30"/"90" branches already clamp against MAX_WINDOW_DAYS;
+    "month" must too. Reachable whenever an operator sets MAX_WINDOW_DAYS
+    below the days remaining in the current month -- otherwise the search
+    is refused later by run_search instead of at the tap."""
+    monkeypatch.setattr(dates_module, "MAX_WINDOW_DAYS", 5)
+
+    d = apply_preset(_draft(), "month", today=TODAY)
+
+    assert d.window_end == "2026-10-19"     # today + 4, inclusive of both
+
+
 def test_a_preset_switches_back_to_window_mode():
     """A preset is a window by definition; leaving the draft in days mode
     would show a window the search would then ignore."""
@@ -294,6 +307,93 @@ def test_caption_names_the_destination_and_calls_it_a_direct_fare_signal():
 def test_caption_without_a_destination_does_not_claim_a_signal():
     text = caption(_draft(), dest_code=None)
     assert "direct-fare signal" not in text
+
+
+def test_a_failed_signal_gets_its_own_note_not_silence():
+    """§6.4 / FIX 2: a ProviderError must render *something*, not the same
+    blank caption as a deployment with no calendar signal at all."""
+    text = caption(_draft(), dest_code=None, signal_failed=True)
+
+    assert "unavailable" in text.lower()
+    assert "direct-fare signal" not in text
+    assert "saving" not in text.lower()
+
+
+def test_a_failed_signal_caption_differs_from_no_signal_and_from_success():
+    no_signal = caption(_draft(), dest_code=None, signal_failed=False)
+    success = caption(_draft(), dest_code="NRT", signal_failed=False)
+    failed = caption(_draft(), dest_code=None, signal_failed=True)
+
+    assert len({no_signal, success, failed}) == 3
+
+
+def test_signal_failed_wins_over_a_stray_dest_code():
+    """Belt and braces: even if a caller passed both, the failure note is
+    what must show -- claiming a signal that just failed would be worse
+    than showing no destination at all."""
+    text = caption(_draft(), dest_code="NRT", signal_failed=True)
+    assert "direct-fare signal" not in text
+    assert "unavailable" in text.lower()
+
+
+# ── esc() on the caption's interpolations ───────────────────────────────────
+
+
+def test_caption_escapes_the_origin_and_destination():
+    hostile = _draft(origin="<b>LPA</b>")
+    text = caption(hostile, dest_code="<i>NRT</i>")
+
+    assert "<b>LPA</b>" not in text
+    assert "<i>NRT</i>" not in text
+    assert "&lt;b&gt;LPA&lt;/b&gt;" in text
+    assert "&lt;i&gt;NRT&lt;/i&gt;" in text
+
+
+# ── Booking horizon (FIX 1) ──────────────────────────────────────────────────
+
+
+def test_a_date_beyond_the_horizon_is_refused_with_an_alert():
+    from handlers.utils import MAX_DAYS_AHEAD
+    from models import add_days
+
+    too_far = add_days(TODAY, MAX_DAYS_AHEAD + 1)
+
+    after, alert = apply_day_tap(_draft(), too_far, today=TODAY)
+
+    assert after.window_start is None            # unchanged
+    assert alert is not None
+    assert str(MAX_DAYS_AHEAD) in alert
+
+
+def test_the_last_in_horizon_day_is_still_accepted():
+    from handlers.utils import MAX_DAYS_AHEAD
+    from models import add_days
+
+    at_horizon = add_days(TODAY, MAX_DAYS_AHEAD)
+
+    after, alert = apply_day_tap(_draft(), at_horizon, today=TODAY)
+
+    assert alert is None
+    assert after.window_start == at_horizon
+
+
+def test_a_month_entirely_beyond_the_horizon_renders_no_tappable_days():
+    from handlers.utils import MAX_DAYS_AHEAD
+    from models import add_days
+
+    # A month that starts safely past the horizon -- every day in it must
+    # be non-tappable, the same "·" cell a past day gets.
+    far = add_days(TODAY, MAX_DAYS_AHEAD + 40)
+    year, month = int(far[:4]), int(far[5:7])
+
+    rows = month_rows(year, month, draft=_draft(), today=TODAY)
+    tappable = [b for row in rows for b in row if b.data.startswith("d:")]
+    assert tappable == []
+
+    # The grid still lays the month out -- every real day renders the same
+    # non-tappable "·" cell a past day gets, not a hole in the calendar.
+    day_cells = [b for row in rows for b in row if b.label == "·"]
+    assert len(day_cells) >= 28
 
 
 # ── Month arithmetic ─────────────────────────────────────────────────────────
