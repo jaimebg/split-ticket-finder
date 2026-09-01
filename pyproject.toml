@@ -15,6 +15,19 @@ dependencies = [
     "httpx>=0.27.0",
 ]
 
+# setuptools cannot guess what to package in a flat layout with more than one
+# top-level package -- it refuses rather than risk shipping the wrong thing, so
+# `pip install -e .` fails outright without this. `find` (rather than an
+# explicit list) means a new subpackage under any of these -- handlers/search/
+# was the last one -- is picked up without editing this file again.
+[tool.setuptools.packages.find]
+include = ["engine*", "handlers*", "providers*"]
+
+# The flat modules beside those packages. Tests import db, config, models and
+# search directly, and bot is the entry point.
+[tool.setuptools]
+py-modules = ["bot", "config", "db", "models", "scheduler", "search"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
