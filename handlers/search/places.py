@@ -97,7 +97,7 @@ async def resolve(term: str, limit: int = MAX_RESULTS) -> list[Place]:
 
 def _label(place: Place, selected: bool) -> str:
     mark = "✓" if selected else ""
-    return f"{mark}{esc(place.code)} {esc(place.name)} · {esc(place.city)} ({esc(place.country)})"
+    return f"{mark}{esc(place.code)} · {esc(place.city)} {esc(place.name)} ({esc(place.country)})"
 
 
 def render_picker(
@@ -111,7 +111,7 @@ def render_picker(
     """The picker screen for *field* ("dest" or "hubs")."""
     chosen = draft.dest_codes if field == "dest" else draft.hub_codes
 
-    lines = [_FIELD_TITLES[field]]
+    lines = [f"<b>{_FIELD_TITLES[field]}</b>"]
 
     if error:
         lines.append(f"\n⚠️ {esc(error)}")

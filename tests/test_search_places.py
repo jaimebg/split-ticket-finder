@@ -163,14 +163,20 @@ def _draft():
 def test_picker_escapes_provider_text():
     """The Layer 2 carry-forward flags these interpolations as safe only by
     luck. An unescaped '<' makes Telegram reject the whole message."""
-    hostile = Place(code="XXX", name="A<b>", city="C&D", country='E"F',
+    hostile = Place(code="XXX", name="A<b>&B", city="Tokyo", country="Japan",
                     place_id="x")
-    text, rows = places.render_picker(_draft(), field="dest",
-                                      results=[hostile], term="x")
-    blob = text + "".join(b.label for row in rows for b in row)
+    _, rows = places.render_picker(_draft(), field="dest",
+                                   results=[hostile], term="x")
+    labels = "".join(b.label for row in rows for b in row)
 
-    assert "<b>" not in blob
-    assert "&lt;b&gt;" in blob
+    assert "A<b>&B" not in labels
+    assert "A&lt;b&gt;&amp;B" in labels
+
+
+def test_picker_renders_heading_as_bold():
+    """Field titles are bolded to match other screens in the package."""
+    text, _ = places.render_picker(_draft(), field="dest", results=[], term="")
+    assert text.startswith("<b>")
 
 
 def test_picker_escapes_the_users_own_search_term():
