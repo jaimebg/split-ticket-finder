@@ -130,11 +130,16 @@ claim than one only the primary provider could confirm.
 
 ## Features
 
-- **Guided search** — a button-driven Telegram conversation collects
-  destinations, trip type, dates and hubs, with a query-count estimate before
-  anything is fetched.
-- **Flexible dates** — type an explicit list, or build one from a start/end
-  range at a configurable step.
+- **Guided search** — a single draft message you edit in place: pick
+  destinations, trip shape, dates and hubs in any order, with Back and Edit
+  on every field and a query-count estimate before anything is fetched.
+- **Place search** — type a city or airport name and pick from the matches;
+  no IATA code needed. Pasting codes still works. Falls back to codes when
+  no configured provider can resolve names.
+- **Date picker** — a month grid. Choose a window (the engine prices every
+  day in it) or tap individual days. Where the provider has a price
+  calendar, days are marked with a direct-fare signal for your first
+  destination.
 - **Ranked results** — cheapest itineraries with per-hub and per-date bests,
   savings against the airline's own through-fare, and deep links straight to
   each leg's booking page.
@@ -244,7 +249,13 @@ scheduler.py            background price-tracking loop
 db.py                   async SQLite layer with in-place migrations
 handlers/
   start.py              /start, main menu, owner-only auth decorators
-  search_flow.py        the guided search ConversationHandler
+  search_flow.py        run_and_report: run a search, report it, persist it
+  search/               the guided search conversation
+    draft.py            SearchDraft: fields, screen state, draft rendering
+    builder.py          anchor message, single-state routing, Back
+    places.py           name-to-airport autocomplete with a typed-code fallback
+    dates.py            month grid: window and multi-day selection
+    hubs.py             hub multi-select and presets
   favorites.py          track / list / untrack routes
   history.py            view and re-run past searches
   utils.py              validation, HTML escaping, message chunking
