@@ -2,15 +2,21 @@
 
 The guided conversation moved to ``handlers/search/`` in Layer 3a. What is
 left is the engine-facing half: ``run_and_report``, shared by the builder
-and by history reruns, and the two pure helpers the pre-flight summary
-needs.
+and by history reruns; ``_estimate_queries``, which the builder still calls
+for its pre-flight query count; and ``_oversized_window_message``, which
+gated date input in the old conversation -- a different concern from the
+pre-flight summary. Task 7 deleted both of that function's call sites along
+with the conversation it belonged to, so it no longer gates anything
+reachable from production code.
 
-These stay here rather than moving with the conversation because
-``tests/test_search_flow.py`` patches ``run_search`` and
-``primary_provider`` as attributes of *this module*; a moved function
-resolves those names in its new namespace and the patches would silently
-stop taking effect. Layer 3b rewrites results and has to touch those tests
-anyway -- the move belongs there.
+``run_and_report`` and ``_estimate_queries`` stay here rather than moving
+with the conversation because ``tests/test_search_flow.py`` patches
+``run_search`` and ``primary_provider`` as attributes of *this module*; a
+moved function resolves those names in its new namespace and the patches
+would silently stop taking effect. ``_oversized_window_message`` is
+retained only because that same test file still exercises it directly.
+Layer 3b rewrites results and has to touch those tests anyway -- the move
+of all three, and the tests, belongs there.
 """
 from __future__ import annotations
 
