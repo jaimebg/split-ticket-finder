@@ -131,7 +131,19 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if draft.screen == SCREEN_DATES:
         text, rows = _dates_screen(context, draft)
     elif draft.screen == SCREEN_HUBS:
-        text, rows = hubs_mod.render_hubs(draft)
+        # A name search in progress keeps its picker open, exactly like
+        # SCREEN_DEST below -- otherwise picking one match reverts to the
+        # static preset grid and the rest of the matches are lost. The
+        # preset grid is still the first thing shown, since results start
+        # empty.
+        results = context.user_data.get(_RESULTS)
+        if results:
+            text, rows = places_mod.render_picker(
+                draft, field="hubs", results=results,
+                term=context.user_data.get(_TERM, ""),
+            )
+        else:
+            text, rows = hubs_mod.render_hubs(draft)
     elif draft.screen == SCREEN_DEST:
         text, rows = places_mod.render_picker(
             draft, field="dest",
