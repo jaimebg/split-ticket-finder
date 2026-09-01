@@ -48,7 +48,7 @@ def toggle_hub(
             current[code] = name
         else:
             current[code] = _KNOWN.get(code, code)
-    return draft.with_(hubs=tuple(sorted(current.items())))
+    return draft.with_(hubs=tuple(current.items()))
 
 
 def apply_hub_preset(draft: SearchDraft, preset: str) -> SearchDraft:
@@ -66,7 +66,7 @@ def add_typed_hubs(draft: SearchDraft, codes: list[str]) -> SearchDraft:
     for code in codes:
         if code not in current:
             current[code] = _KNOWN.get(code, code)
-    return draft.with_(hubs=tuple(sorted(current.items())))
+    return draft.with_(hubs=tuple(current.items()))
 
 
 def render_hubs(draft: SearchDraft) -> tuple[str, Rows]:

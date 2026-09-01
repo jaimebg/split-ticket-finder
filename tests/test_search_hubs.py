@@ -99,6 +99,37 @@ def test_typed_codes_do_not_duplicate_an_existing_hub():
     assert d.hub_codes == ("MAD",)
 
 
+def test_toggle_preserves_insertion_order():
+    """Toggling MAD, then BCN, then LIS yields exactly ("MAD", "BCN", "LIS")."""
+    d = _draft()
+    d = toggle_hub(d, "MAD")
+    d = toggle_hub(d, "BCN")
+    d = toggle_hub(d, "LIS")
+    assert d.hub_codes == ("MAD", "BCN", "LIS")
+
+
+def test_typed_codes_preserve_insertion_order():
+    """Selecting ZRH first and typing MAD yields exactly ("ZRH", "MAD")."""
+    d = toggle_hub(_draft(), "ZRH", name="Zurich")
+    d = add_typed_hubs(d, ["MAD"])
+    assert d.hub_codes == ("ZRH", "MAD")
+
+
+def test_preset_and_individual_toggles_yield_same_order():
+    """Tapping 'Top 3' and toggling same hubs individually produce same tuple."""
+    # Path 1: use preset
+    d_preset = apply_hub_preset(_draft(), "top3")
+
+    # Path 2: toggle individually
+    d_toggle = _draft()
+    d_toggle = toggle_hub(d_toggle, "MAD")
+    d_toggle = toggle_hub(d_toggle, "BCN")
+    d_toggle = toggle_hub(d_toggle, "LIS")
+
+    assert d_preset.hub_codes == d_toggle.hub_codes
+    assert d_preset.hub_codes == ("MAD", "BCN", "LIS")
+
+
 def test_render_marks_selected_hubs():
     d = toggle_hub(_draft(), "MAD")
     _, rows = render_hubs(d)
