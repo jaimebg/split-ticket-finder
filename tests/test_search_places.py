@@ -203,6 +203,26 @@ def test_picker_offers_done_and_back():
     assert "back" in data
 
 
+def test_picker_reports_no_matches_when_a_search_actually_ran(monkeypatch):
+    monkeypatch.setattr(places, "places_provider", lambda: FakePlacesProvider())
+
+    text, _ = places.render_picker(_draft(), field="dest", results=[], term="Zzzqx")
+
+    assert "Nothing matched" in text
+
+
+def test_picker_omits_nothing_matched_without_a_capable_provider(monkeypatch):
+    """FIX 4: no places provider configured means no search ever ran --
+    asserting "Nothing matched" would claim a result that was never
+    obtained, the same empty-vs-unavailable collapse FIX 2 covers for the
+    price calendar."""
+    monkeypatch.setattr(places, "places_provider", lambda: None)
+
+    text, _ = places.render_picker(_draft(), field="dest", results=[], term="Tokyo")
+
+    assert "Nothing matched" not in text
+
+
 def test_picker_without_a_capable_provider_asks_for_codes(monkeypatch):
     """A Kiwi-less deployment keeps a working search — the second half of
     the two success criteria that would otherwise contradict."""

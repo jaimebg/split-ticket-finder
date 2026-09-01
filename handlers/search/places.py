@@ -110,18 +110,22 @@ def render_picker(
 ) -> tuple[str, Rows]:
     """The picker screen for *field* ("dest" or "hubs")."""
     chosen = draft.dest_codes if field == "dest" else draft.hub_codes
+    has_provider = places_provider() is not None
 
     lines = [f"<b>{_FIELD_TITLES[field]}</b>"]
 
     if error:
         lines.append(f"\n⚠️ {esc(error)}")
         lines.append(PROMPT_WITH_SEARCH)
-    elif places_provider() is None:
+    elif not has_provider:
         lines.append("\n" + PROMPT_CODES_ONLY)
     else:
         lines.append("\n" + PROMPT_WITH_SEARCH)
 
-    if term and not results and not error:
+    # "Nothing matched" asserts that a search ran and came back empty. With
+    # no places provider configured, no search ran at all -- the same
+    # empty-vs-unavailable collapse the calendar signal must avoid.
+    if term and not results and not error and has_provider:
         lines.append(f"\nNothing matched <b>{esc(term)}</b>.")
 
     if chosen:
