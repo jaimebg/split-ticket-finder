@@ -9,11 +9,21 @@ is complete and reviewed. It replaces the eleven-state linear conversation
 with a single `BUILDING` state driven by `SearchDraft.screen`, resolves
 place names without the user typing an IATA code when a places-capable
 provider is enabled, and degrades cleanly to typed codes when it isn't. It
-touches no engine code and changes no persisted shape. This records what it
+touches no engine code and changes no *existing* persisted shape — no
+column was added to `searches` or `favorites`, no migration was needed, so
+`db.py`'s `MIGRATIONS` tuple, `scheduler.py` and `handlers/history.py` never
+had to be re-reasoned about. (It does add one new table, `place_cache` —
+see "Decisions 3a made that bind later work" below.) This records what it
 deliberately left undone and the decisions that bind Layer 3b and 3c, so the
 next stage starts from the record rather than rediscovering it.
 
 ## What 3b inherits
+
+This list is the non-obvious hazards, not the scope. The broad items — the
+progress message and cancel button, and result cards / pagination / filters /
+detail view — are already itemized in
+[design §8](2026-08-31-layer-3a-builder-design.md#8-what-3a-does-not-do);
+look there for the full landing surface.
 
 - **The `savings_pct` sign guard for card renderers.** The stored field is
   unguarded and goes negative when the through-fare beats the split (Layer
@@ -42,6 +52,12 @@ next stage starts from the record rather than rediscovering it.
   commit, or the suite goes green while testing nothing.
 
 ## What 3c inherits
+
+Same caveat: this is the hazards, not the scope. Passengers / cabin /
+currency / bags / limits as a feature are in
+[design §8](2026-08-31-layer-3a-builder-design.md#8-what-3a-does-not-do)
+already — the entries below are what makes shipping that feature safe or
+unsafe, not the feature itself.
 
 - **The `run_search` signature and its four `LegQuery` call sites.** 3c is
   the only stage that changes an engine signature — that's the reason it's
@@ -76,11 +92,23 @@ next stage starts from the record rather than rediscovering it.
   off `primary_provider()` instead would make the picker's availability
   depend on an unrelated deployment choice.
 - **Window mode stores `dates` as the full expanded span rather than adding
-  a `date_mode` column.** That is what kept this layer free of any persisted
-  -shape change, so `db.py`, `scheduler.py` and `handlers/history.py` were
-  never re-reasoned about. About 1 KB of JSON per window search buys that.
-  Don't "optimize" this into a compact range representation without
-  reopening those three files.
+  a `date_mode` column.** That is what kept `searches`/`favorites` free of
+  any persisted-shape change, so `db.py`'s `MIGRATIONS` tuple, `scheduler.py`
+  and `handlers/history.py` were never re-reasoned about. About 1 KB of JSON
+  per window search buys that. Don't "optimize" this into a compact range
+  representation without reopening those three files.
+- **`place_cache` is a new table, not a migration.** §7.1's
+  `place_cache(term TEXT PRIMARY KEY, places TEXT, cached_at TEXT)` is
+  created via `SCHEMA`, not appended to `MIGRATIONS` — `init_db` runs
+  `executescript(SCHEMA)` on every start (table creation is idempotent via
+  `CREATE TABLE IF NOT EXISTS`), and `MIGRATIONS` exists only to add columns
+  to tables that already exist elsewhere. It's keyed on the casefolded,
+  whitespace-collapsed search term, with `PLACE_CACHE_TTL_HOURS` defaulting
+  to 720 (30 days). Known gap: it has a TTL but no eviction and no size
+  bound — a stale row is never read as a hit once past TTL, but it is also
+  never deleted, so the table grows without bound in the number of distinct
+  terms ever searched. Fine at this stage's traffic; worth capping before a
+  deployment sees enough distinct place queries for it to matter.
 - **Navigation state lives on `SearchDraft.screen`, not in
   `ConversationHandler`, which keeps ONE state.** Adding a screen means
   adding a `SCREEN_*` constant and a branch in `_show` — never a new PTB
