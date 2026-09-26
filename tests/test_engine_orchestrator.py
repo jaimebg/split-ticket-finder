@@ -1196,3 +1196,29 @@ async def test_overnight_end_to_end_two_stage(monkeypatch):
     [itin] = result.itineraries
     assert (itin.dom_date, itin.date, itin.overnight) == ("2026-09-30", "2026-10-01", True)
     assert itin.through_fare == Decimal("700")      # priced on the onward date
+
+
+async def test_the_cross_check_prices_overnight_trips_on_their_domestic_days(monkeypatch):
+    """The secondary must confirm the same trip: domestic legs a day early.
+    Pricing it on the onward day and matching by onward date would claim
+    'priced by both' for a trip the secondary never saw."""
+    _neutral_discount(monkeypatch)
+    legs = {("LPA", "MAD", "2026-09-30"): [_offer("25")],
+            ("MAD", "NRT", "2026-10-01"): [_offer("480")]}
+    primary = FakeCalendarProvider(
+        name="primary",
+        calendar_answers={("LPA", "MAD"): {"2026-09-30": "29"},
+                          ("MAD", "NRT"): {"2026-10-01": "500"}},
+        leg_answers=legs)
+    secondary = FakeProvider(legs)
+    secondary.name = "secondary"
+    monkeypatch.setattr(orchestrator, "enabled_providers",
+                        lambda: {"primary": primary, "secondary": secondary})
+
+    result = await run_search(origin="LPA", destinations={"NRT": "Tokyo"},
+                              hubs={"MAD": "Madrid"}, window=WINDOW, trip_days=0,
+                              provider=primary, options=SearchOptions(overnight=True))
+
+    assert ("LPA", "MAD", "2026-09-30") in {(q.origin, q.dest, q.date) for q in secondary.seen}
+    assert ("LPA", "MAD", "2026-10-01") not in {(q.origin, q.dest, q.date) for q in secondary.seen}
+    assert result.itineraries[0].providers == ("primary", "secondary")

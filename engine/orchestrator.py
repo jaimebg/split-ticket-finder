@@ -339,7 +339,8 @@ async def _cross_check(
     candidates = [
         Candidate(date=tagged[i].date, return_date=tagged[i].return_date,
                   hub=tagged[i].hub, dest=tagged[i].dest, dom_price=tagged[i].dom_price,
-                  onward_price=tagged[i].onward_price, discount=tagged[i].discount)
+                  onward_price=tagged[i].onward_price, discount=tagged[i].discount,
+                  overnight=tagged[i].overnight)
         for i in top_indices
     ]
     relabel = _PhaseRelabeler(on_progress)

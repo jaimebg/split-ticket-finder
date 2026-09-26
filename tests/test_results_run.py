@@ -517,3 +517,30 @@ async def test_the_options_are_searched_and_stored(temp_db, fake_engine):
         adults=2, children=1, cabin="BUSINESS", currency="USD", max_stops=1, min_layover=60)
     row = (await db_module.get_searches(1))[0]
     assert SearchOptions.from_mapping(row) == fake_engine["calls"][0]["options"]
+
+
+async def test_overnight_never_searches_a_domestic_flight_for_yesterday(temp_db, fake_engine):
+    """With a night at the hub the domestic flight is the day before, so an
+    international flight today is impossible: today is dropped, not searched."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    tomorrow = str(today + timedelta(days=1))
+    params = _base_params(dates=[str(today), tomorrow], overnight=True)
+
+    await run_and_report(FakeBot(), chat_id=1, params=params)
+
+    call = fake_engine["calls"][0]
+    assert call["dates"] == [tomorrow]
+    assert call["window"].start == tomorrow
+
+
+async def test_overnight_with_only_today_explains_instead_of_searching(temp_db, fake_engine):
+    from datetime import date
+
+    bot = FakeBot()
+    await run_and_report(bot, chat_id=1,
+                         params=_base_params(dates=[str(date.today())], overnight=True))
+
+    assert fake_engine["calls"] == []
+    assert "earliest international flight is tomorrow" in bot.messages[-1]

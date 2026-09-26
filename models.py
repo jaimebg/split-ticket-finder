@@ -373,6 +373,18 @@ def generate_dates(start, end, every):
     return dates
 
 
+def bookable_onward_dates(dates: list[str], overnight: bool, today: str) -> list[str]:
+    """The onward dates a search can actually fly.
+
+    With a night at the hub the domestic flight is the day before the onward
+    one, so an onward flight today would need a domestic flight yesterday.
+    Those dates are dropped rather than searched. *today* is "YYYY-MM-DD".
+    """
+    if not overnight:
+        return list(dates)
+    return [d for d in dates if d > today]
+
+
 def add_days(date, days):
     """Return *date* shifted by *days*, both as "YYYY-MM-DD" strings."""
     return (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
