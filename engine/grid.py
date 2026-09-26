@@ -39,7 +39,7 @@ from decimal import Decimal
 from engine.drill import cheapest
 from engine.fetch import LegFetcher
 from models import Itinerary, SearchWindow, add_days, generate_dates
-from providers.base import LegQuery, Offer
+from providers.base import Offer, SearchOptions
 
 # Google has no calendar, so a wide window can only be sampled rather than
 # covered. This caps how many distinct departure dates a fallback search
@@ -93,8 +93,7 @@ async def run_grid_search(
     dest_names: dict[str, str],
     discount_airports: set[str],
     discount: Decimal,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
     max_dates: int = FALLBACK_MAX_DATES,
     explicit_dates: list[str] | None = None,
 ) -> list[Itinerary]:
@@ -126,11 +125,9 @@ async def run_grid_search(
     ``hub in discount_airports``. Results are sorted cheapest (``.total``)
     first.
 
-    Only ``adults`` and ``currency`` are forwarded onto each ``LegQuery``;
-    ``min_layover``, ``children`` and ``cabin`` are left at their defaults,
-    because ``GoogleProvider`` raises a bare ``ProviderError`` -- aborting
-    the whole phase -- for any of them being set, and this path exists for
-    Google-only deployments.
+    Every option in ``options`` is forwarded onto each ``LegQuery``. An option
+    the provider can't express is refused before the search starts (see
+    ``providers.base.Capabilities``), so it never reaches this phase.
     """
     if not dests or not hubs:
         return []
@@ -144,7 +141,7 @@ async def run_grid_search(
 
     # ── Phase 1: outbound discounted leg (origin -> hubs) ───────────────────
     phase1_queries = [
-        LegQuery(origin=origin, dest=hub, date=date, adults=adults, currency=currency)
+        options.leg_query(origin, hub, date)
         for hub in hubs
         for date in dates
     ]
@@ -156,8 +153,7 @@ async def run_grid_search(
     dom_ret: dict[tuple[str, str, str], list[Offer]] = {}
     if round_trip:
         phase1r_queries = [
-            LegQuery(origin=hub, dest=origin, date=add_days(date, trip_days),
-                      adults=adults, currency=currency)
+            options.leg_query(hub, origin, add_days(date, trip_days))
             for (_, hub, date) in dom_out
         ]
         dom_ret = await fetcher.fetch_many(phase1r_queries, phase="Phase 1R")
@@ -167,7 +163,7 @@ async def run_grid_search(
     # hub with no flights from origin on any sampled date never appears as a
     # key in dom_out, so it is never queried for onward flights either.
     phase2_queries = [
-        LegQuery(origin=hub, dest=dest, date=date, adults=adults, currency=currency)
+        options.leg_query(hub, dest, date)
         for (_, hub, date) in dom_out
         for dest in dests
     ]
@@ -177,8 +173,7 @@ async def run_grid_search(
     onward_ret: dict[tuple[str, str, str], list[Offer]] = {}
     if round_trip:
         phase2r_queries = [
-            LegQuery(origin=dest, dest=hub, date=add_days(date, trip_days),
-                      adults=adults, currency=currency)
+            options.leg_query(dest, hub, add_days(date, trip_days))
             for (hub, dest, date) in onward_out
         ]
         onward_ret = await fetcher.fetch_many(phase2r_queries, phase="Phase 2R")

@@ -7,7 +7,13 @@ import pytest
 
 from engine.scan import CalendarGrid, scan_calendars
 from models import CancelToken, SearchCancelled, SearchWindow
-from providers.base import ProviderError, ProviderFetchError, ProviderParseError, RatedPrice
+from providers.base import (
+    ProviderError,
+    ProviderFetchError,
+    ProviderParseError,
+    RatedPrice,
+    SearchOptions,
+)
 
 
 class FakeCalendarProvider:
@@ -43,7 +49,7 @@ async def test_one_way_issues_one_calendar_per_leg_pair():
     provider = FakeCalendarProvider()
     await scan_calendars(
         provider, origin="LPA", hubs=["MAD", "BCN"], dests=["NRT", "JFK"],
-        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        window=WINDOW, trip_days=0, options=SearchOptions(),
     )
     # 2 hubs (origin->hub) + 2 hubs x 2 dests (hub->dest) = 6
     assert len(provider.calls) == 6
@@ -55,7 +61,7 @@ async def test_round_trip_doubles_the_calls_over_a_shifted_window():
     provider = FakeCalendarProvider()
     await scan_calendars(
         provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-        window=WINDOW, trip_days=14, adults=1, currency="EUR",
+        window=WINDOW, trip_days=14, options=SearchOptions(),
     )
     # outbound: LPA->MAD, MAD->NRT.  return: MAD->LPA, NRT->MAD, shifted 14 days.
     assert len(provider.calls) == 4
@@ -68,7 +74,7 @@ async def test_request_count_does_not_grow_with_window_length():
     short = FakeCalendarProvider()
     long = FakeCalendarProvider()
     kw = {"origin": "LPA", "hubs": ["MAD", "BCN"], "dests": ["NRT"],
-          "trip_days": 0, "adults": 1, "currency": "EUR"}
+          "trip_days": 0, "options": SearchOptions()}
     await scan_calendars(short, window=SearchWindow("2026-10-01", "2026-10-03"), **kw)
     await scan_calendars(long, window=SearchWindow("2026-10-01", "2026-12-30"), **kw)
     assert len(short.calls) == len(long.calls)
@@ -81,7 +87,7 @@ async def test_grid_exposes_prices_by_leg_and_date():
     })
     grid: CalendarGrid = await scan_calendars(
         provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        window=WINDOW, trip_days=0, options=SearchOptions(),
     )
     assert grid.out_dom["MAD"]["2026-10-01"].price == Decimal("29")
     assert grid.out_onward[("MAD", "NRT")]["2026-10-01"].price == Decimal("575")
@@ -94,7 +100,7 @@ async def test_a_hub_with_no_calendar_data_is_simply_absent():
     provider = FakeCalendarProvider({("LPA", "MAD"): {"2026-10-01": "29"}})
     grid: CalendarGrid = await scan_calendars(
         provider, origin="LPA", hubs=["MAD", "BCN"], dests=["NRT"],
-        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        window=WINDOW, trip_days=0, options=SearchOptions(),
     )
     assert "MAD" in grid.out_dom
     assert grid.out_dom.get("BCN", {}) == {}
@@ -107,7 +113,7 @@ async def test_scan_is_cancellable():
     with pytest.raises(SearchCancelled):
         await scan_calendars(
             provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-            window=WINDOW, trip_days=0, adults=1, currency="EUR", cancel=token,
+            window=WINDOW, trip_days=0, options=SearchOptions(), cancel=token,
         )
     assert provider.calls == []
 
@@ -120,7 +126,7 @@ async def test_a_parse_error_drops_only_that_leg_and_is_counted():
     )
     grid = await scan_calendars(
         provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        window=WINDOW, trip_days=0, options=SearchOptions(),
     )
     assert grid.parse_errors == 1
     assert grid.fetch_errors == 0
@@ -136,7 +142,7 @@ async def test_a_fetch_error_drops_only_that_leg_and_is_counted_separately():
     )
     grid = await scan_calendars(
         provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        window=WINDOW, trip_days=0, options=SearchOptions(),
     )
     assert grid.fetch_errors == 1
     assert grid.parse_errors == 0
@@ -148,7 +154,7 @@ async def test_a_clean_scan_leaves_both_error_counters_at_zero():
     provider = FakeCalendarProvider({("LPA", "MAD"): {"2026-10-01": "29"}})
     grid = await scan_calendars(
         provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-        window=WINDOW, trip_days=0, adults=1, currency="EUR",
+        window=WINDOW, trip_days=0, options=SearchOptions(),
     )
     assert grid.parse_errors == 0
     assert grid.fetch_errors == 0
@@ -165,7 +171,7 @@ async def test_a_bare_provider_error_propagates_and_is_not_counted():
     with pytest.raises(ProviderError):
         await scan_calendars(
             provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
-            window=WINDOW, trip_days=0, adults=1, currency="EUR",
+            window=WINDOW, trip_days=0, options=SearchOptions(),
         )
 
 

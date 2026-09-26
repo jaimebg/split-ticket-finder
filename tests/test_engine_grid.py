@@ -19,6 +19,7 @@ from decimal import Decimal
 from engine.fetch import LegFetcher
 from engine.grid import FALLBACK_MAX_DATES, _sample_explicit_dates, run_grid_search
 from models import SearchWindow
+from providers.base import SearchOptions
 from tests.test_engine_fetch import FakeProvider, _offer
 
 
@@ -45,7 +46,7 @@ async def test_a_90_day_window_is_sampled_at_or_under_the_cap():
     await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     dates_queried = {date for _, _, date in _seen(provider)}
@@ -60,7 +61,7 @@ async def test_a_5_day_window_yields_exactly_five_dates():
     await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     dates_queried = {date for _, _, date in _seen(provider)}
@@ -88,7 +89,7 @@ async def test_four_phases_run_in_order_and_produce_a_confirmed_itinerary():
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=14, hub_names={"MAD": "Madrid"},
         dest_names={"NRT": "Tokyo"}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     # Each phase ran exactly once, and phase 1 (+1R) fully preceded phase 2
@@ -122,7 +123,7 @@ async def test_return_legs_are_queried_only_on_the_return_date():
     await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=14, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     seen = _seen(provider)
@@ -149,7 +150,7 @@ async def test_a_hub_unreachable_in_phase_1_is_never_queried_in_phase_2():
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD", "BCN"],
         window=window, trip_days=0, hub_names={"MAD": "Madrid", "BCN": "Barcelona"},
         dest_names={"NRT": "Tokyo"}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert [itin.hub for itin in result] == ["MAD"]
@@ -163,7 +164,7 @@ async def test_an_empty_first_phase_means_no_onward_queries_at_all():
     result = await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert result == []
@@ -184,7 +185,7 @@ async def test_a_combination_missing_the_onward_leg_produces_no_itinerary():
     result = await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert result == []
@@ -202,7 +203,7 @@ async def test_a_round_trip_missing_only_the_return_leg_produces_no_itinerary():
     result = await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=14, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert result == []
@@ -224,7 +225,7 @@ async def test_round_trip_sums_all_four_legs():
     result = await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=14, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert len(result) == 1
@@ -244,7 +245,7 @@ async def test_one_way_uses_only_two_legs_and_skips_return_phases():
     result = await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert len(result) == 1
@@ -275,7 +276,7 @@ async def test_discount_applies_only_to_the_qualifying_hub():
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD", "LIS"],
         window=window, trip_days=0, hub_names={"MAD": "Madrid", "LIS": "Lisboa"},
         dest_names={"NRT": "Tokyo"}, discount_airports={"MAD"},
-        discount=Decimal("0.75"), adults=1, currency="EUR",
+        discount=Decimal("0.75"), options=SearchOptions(),
     )
 
     by_hub = {itin.hub: itin for itin in result}
@@ -299,7 +300,7 @@ async def test_results_are_sorted_cheapest_first():
     result = await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD", "BCN"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     totals = [itin.total for itin in result]
@@ -316,7 +317,7 @@ async def test_empty_destinations_makes_no_requests():
         _fetcher(provider), origin="LPA", dests=[], hubs=["MAD"],
         window=SearchWindow("2026-10-01", "2026-10-01"), trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
     assert result == []
     assert provider.seen == []
@@ -328,7 +329,7 @@ async def test_empty_hubs_makes_no_requests():
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=[],
         window=SearchWindow("2026-10-01", "2026-10-01"), trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
     assert result == []
     assert provider.seen == []
@@ -356,14 +357,14 @@ async def test_explicit_dates_are_searched_even_when_a_window_sample_would_miss_
     await run_grid_search(
         _fetcher(without_explicit), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
     assert "2026-09-20" not in {date for _, _, date in _seen(without_explicit)}
 
     await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
         explicit_dates=["2026-09-01", "2026-09-20"],
     )
 
@@ -379,7 +380,7 @@ async def test_explicit_dates_beyond_the_cap_are_sampled_but_keep_both_extremes(
     await run_grid_search(
         _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
         window=window, trip_days=0, hub_names={}, dest_names={},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
         max_dates=5, explicit_dates=dates,
     )
 

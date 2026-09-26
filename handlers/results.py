@@ -31,7 +31,7 @@ from handlers.search.draft import Button, Rows
 from handlers.start import owner_only_callback
 from handlers.utils import esc, load_json_list
 from models import CancelToken, Progress, SearchCancelled, SearchWindow
-from providers.base import SupportsCalendar
+from providers.base import SearchOptions, SupportsCalendar
 from providers.registry import primary_provider
 from results import store, view
 from results.filters import Filters
@@ -211,8 +211,7 @@ async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | N
             hubs=params["hubs"],
             window=window,
             trip_days=params.get("trip_days", 0),
-            adults=params["adults"],
-            currency=currency,
+            options=SearchOptions.from_mapping(params),
             dates=dates,
             cancel=cancel,
             on_progress=progress.tick,

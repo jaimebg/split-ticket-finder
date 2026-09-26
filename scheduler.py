@@ -9,6 +9,7 @@ from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD
 from db import add_price_check, get_favorites, update_favorite_price
 from engine import run_search
 from models import SearchWindow
+from providers.base import SearchOptions
 from providers.registry import get_provider, primary_provider
 
 logger = logging.getLogger(__name__)
@@ -88,8 +89,7 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
                 hubs={hub: hub},
                 window=window,
                 trip_days=trip_days,
-                adults=adults,
-                currency=currency,
+                options=SearchOptions(adults=adults, currency=currency),
                 provider=provider,
             )
         except Exception:

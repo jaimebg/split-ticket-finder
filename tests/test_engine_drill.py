@@ -16,7 +16,7 @@ import pytest
 from engine.drill import confirm, through_fares
 from engine.fetch import LegFetcher
 from models import CancelToken, Candidate, Itinerary, SearchCancelled
-from providers.base import ProviderError
+from providers.base import ProviderError, SearchOptions
 from tests.test_engine_fetch import FakeProvider, _offer
 
 
@@ -60,7 +60,7 @@ async def test_confirm_builds_itineraries_from_real_offers_not_estimates():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=0,
         hub_names={"MAD": "Madrid"}, dest_names={"NRT": "Tokyo Narita"},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert len(result) == 1
@@ -83,7 +83,7 @@ async def test_confirm_picks_the_cheapest_offer_per_leg():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result[0].dom_out.price == Decimal("40")
@@ -100,7 +100,7 @@ async def test_confirm_drops_a_candidate_missing_any_leg():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == []
@@ -124,7 +124,7 @@ async def test_confirm_fetches_the_shared_domestic_leg_once_for_three_destinatio
         _fetcher(provider), cands, origin="LPA", trip_days=0,
         hub_names={"MAD": "Madrid"},
         dest_names={"NRT": "Tokyo Narita", "JFK": "New York JFK", "LAX": "Los Angeles"},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert len(result) == 3
@@ -147,7 +147,7 @@ async def test_confirm_round_trip_fetches_and_sums_all_four_legs():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=14,
         hub_names={"MAD": "Madrid"}, dest_names={"NRT": "Tokyo Narita"},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert len(provider.seen) == 4
@@ -173,7 +173,7 @@ async def test_confirm_round_trip_drops_candidate_missing_a_return_leg():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=14,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == []
@@ -189,7 +189,7 @@ async def test_confirm_carries_hub_and_dest_names_onto_the_itinerary():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=0,
         hub_names={"MAD": "Madrid"}, dest_names={"NRT": "Tokyo Narita"},
-        discount_airports=set(), discount=Decimal(0), adults=1, currency="EUR",
+        discount_airports=set(), discount=Decimal(0), options=SearchOptions(),
     )
 
     assert result[0].hub_name == "Madrid"
@@ -208,7 +208,7 @@ async def test_confirm_applies_discount_only_for_hubs_in_discount_airports():
     result = await confirm(
         _fetcher(provider), cands, origin="LPA", trip_days=0,
         hub_names={"MAD": "Madrid", "LIS": "Lisbon"}, dest_names={"NRT": "Tokyo Narita"},
-        discount_airports={"MAD"}, discount=Decimal("0.75"), adults=1, currency="EUR",
+        discount_airports={"MAD"}, discount=Decimal("0.75"), options=SearchOptions(),
     )
 
     by_hub = {itin.hub: itin for itin in result}
@@ -228,7 +228,7 @@ async def test_confirm_sorts_results_cheapest_first():
     result = await confirm(
         _fetcher(provider), cands, origin="LPA", trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert [itin.total for itin in result] == sorted(itin.total for itin in result)
@@ -241,7 +241,7 @@ async def test_confirm_on_an_empty_candidate_list_makes_no_requests():
     result = await confirm(
         _fetcher(provider), [], origin="LPA", trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == []
@@ -258,7 +258,7 @@ async def test_confirm_cancellation_propagates_as_search_cancelled():
         await confirm(
             _fetcher(provider, cancel=token), cands, origin="LPA", trip_days=0,
             hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-            adults=1, currency="EUR",
+            options=SearchOptions(),
         )
 
 
@@ -275,7 +275,7 @@ async def test_confirm_one_way_ignores_a_populated_return_date_on_the_candidate(
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert len(result) == 1
@@ -305,7 +305,7 @@ async def test_confirm_never_sets_min_layover_children_or_non_economy_cabin():
     result = await confirm(
         _fetcher(provider), [cand], origin="LPA", trip_days=0,
         hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert len(result) == 1
@@ -343,7 +343,7 @@ async def test_through_fares_queries_only_the_three_cheapest_distinct_dates():
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     # 4 pairs on the 3 cheapest dates: (NRT,01) (JFK,01) (NRT,02) (NRT,03).
@@ -371,7 +371,7 @@ async def test_through_fares_skips_a_cheaper_multi_pnr_offer():
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {("NRT", "2026-10-01"): Decimal("400")}
@@ -387,7 +387,7 @@ async def test_through_fares_pair_absent_when_no_single_pnr_offer_exists():
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {}
@@ -403,7 +403,7 @@ async def test_through_fares_pnr_count_none_does_not_qualify():
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {}
@@ -418,7 +418,7 @@ async def test_through_fares_round_trip_sums_outbound_and_return():
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=14,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {("NRT", "2026-10-01"): Decimal("780")}
@@ -435,7 +435,7 @@ async def test_through_fares_round_trip_non_qualifying_return_yields_no_entry():
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=14,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {}
@@ -446,7 +446,7 @@ async def test_through_fares_on_an_empty_itinerary_list_makes_no_requests():
 
     result = await through_fares(
         _fetcher(provider), [], origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {}
@@ -469,7 +469,7 @@ async def test_through_fares_never_sets_min_layover_children_or_non_economy_cabi
 
     result = await through_fares(
         _fetcher(provider), itineraries, origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     assert result == {("NRT", "2026-10-01"): Decimal("400")}
@@ -488,7 +488,7 @@ async def test_through_fares_feeds_itinerary_savings_and_absent_pair_stays_none(
 
     fares = await through_fares(
         _fetcher(provider), [priced, unpriced], origin="LPA", trip_days=0,
-        adults=1, currency="EUR",
+        options=SearchOptions(),
     )
 
     priced_itin = priced.with_through_fare(fares.get((priced.dest, priced.date)))
