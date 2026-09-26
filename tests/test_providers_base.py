@@ -200,3 +200,11 @@ def test_a_provider_that_declares_nothing_is_assumed_capable():
     assert caps.cabins == frozenset(ALL_CABINS)
     assert caps.rejects(SearchOptions(adults=2, children=1, cabin="FIRST_CLASS",
                                       min_layover=60)) is None
+
+
+def test_calendar_queries_carry_the_search_limits():
+    """Phase 0 ranks from calendars; without the limits it shortlists
+    one-stop dates that a direct-only confirm then throws away."""
+    c = SearchOptions(max_stops=0, min_layover=120).calendar_query(
+        "MAD", "NRT", "2026-10-01", "2026-10-31")
+    assert (c.max_stops, c.min_layover) == (0, 120)

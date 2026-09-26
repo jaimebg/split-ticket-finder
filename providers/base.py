@@ -129,6 +129,10 @@ class CalendarQuery:
     children: int = 0
     cabin: str = "ECONOMY"
     currency: str = "EUR"
+    # The same search limits as LegQuery. Phase 0 ranks from calendars, so a
+    # calendar priced without them shortlists dates a limited confirm drops.
+    max_stops: int | None = None
+    min_layover: int | None = None      # minutes
 
 
 @dataclass(frozen=True)
@@ -199,6 +203,7 @@ class SearchOptions:
         return CalendarQuery(
             origin=origin, dest=dest, start=start, end=end, adults=self.adults,
             children=self.children, cabin=self.cabin, currency=self.currency,
+            max_stops=self.max_stops, min_layover=self.min_layover,
         )
 
     def without_limits(self) -> SearchOptions:

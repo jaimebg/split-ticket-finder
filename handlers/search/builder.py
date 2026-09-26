@@ -135,13 +135,20 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def _dates_screen(context, draft: SearchDraft) -> tuple[str, Rows]:
     year, month = context.user_data.get(_MONTH, _current_month())
     dest = draft.dest_codes[0] if draft.destinations else None
-    cached = context.user_data.get(_RATINGS, {}).get(f"{dest}:{year}-{month}")
+    cached = context.user_data.get(_RATINGS, {}).get(_ratings_key(draft, year, month))
     failed = cached is _RATINGS_FAILED
     ratings = None if failed else cached
     rows = dates_mod.month_rows(year, month, draft=draft, today=_today(),
                                 ratings=ratings)
     dest_code = dest if (cached is not None and not failed) else None
     return dates_mod.caption(draft, dest_code=dest_code, signal_failed=failed), rows
+
+
+def _ratings_key(draft: SearchDraft, year: int, month: int) -> str:
+    """The ratings cache key. It includes the options, so changing the party,
+    cabin or limits prices the signal again instead of showing stale colours."""
+    dest = draft.dest_codes[0] if draft.destinations else None
+    return f"{dest}:{year}-{month}:{draft.options}"
 
 
 def _current_month() -> tuple[int, int]:
@@ -256,22 +263,18 @@ async def _load_ratings(context, draft: SearchDraft) -> None:
 
     year, month = context.user_data.get(_MONTH, _current_month())
     dest = draft.dest_codes[0]
-    key = f"{dest}:{year}-{month}"
+    key = _ratings_key(draft, year, month)
     cache = context.user_data.setdefault(_RATINGS, {})
     if key in cache and cache[key] is not _RATINGS_FAILED:
         return
 
     import calendar as _cal
 
-    from providers.base import CalendarQuery
-
     last = _cal.monthrange(year, month)[1]
     try:
-        table = await provider.price_calendar(CalendarQuery(
-            origin=draft.origin, dest=dest,
-            start=f"{year:04d}-{month:02d}-01",
-            end=f"{year:04d}-{month:02d}-{last:02d}",
-            adults=draft.adults, currency=draft.currency,
+        table = await provider.price_calendar(draft.options.calendar_query(
+            draft.origin, dest,
+            f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last:02d}",
         ))
     except ProviderError as exc:
         logger.info("No date ratings for %s (%s) — signal unavailable this visit.",
