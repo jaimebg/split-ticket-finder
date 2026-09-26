@@ -23,6 +23,9 @@ RUN_AS=${RUN_AS:-stfbot}
 API_REPO=${API_REPO:-jaimebg/split-ticket-finder}
 # Set to 0 to deploy whatever is on the branch without consulting CI.
 REQUIRE_GREEN_CI=${REQUIRE_GREEN_CI:-1}
+# The CI job that triggers this script. It is still running while the script
+# checks CI, so counting it would make every triggered deploy wait on itself.
+DEPLOY_CHECK=${DEPLOY_CHECK:-deploy}
 
 log() { printf '%s\n' "$*"; }
 
@@ -44,9 +47,10 @@ restart_service() {
     fi
 }
 
-# Every check run recorded for a commit must have finished and passed. A commit
-# with no check runs at all counts as not green: it means CI has not started
-# yet, or never will, and neither is evidence the code works.
+# Every check run recorded for a commit must have finished and passed, except
+# the deploy job that is running this script. A commit with no other check runs
+# counts as not green: it means CI has not started yet, or never will, and
+# neither is evidence the code works.
 ci_is_green() {
     local sha=$1 body
     if ! body=$(curl --fail --silent --show-error --max-time 30 \
@@ -56,14 +60,17 @@ ci_is_green() {
         return 1
     fi
 
-    printf '%s' "$body" | python3 -c '
+    printf '%s' "$body" | DEPLOY_CHECK="$DEPLOY_CHECK" python3 -c '
 import json
+import os
 import sys
 
 try:
     runs = json.load(sys.stdin).get("check_runs") or []
 except ValueError:
     sys.exit(1)
+
+runs = [run for run in runs if run.get("name") != os.environ["DEPLOY_CHECK"]]
 
 if not runs:
     sys.exit(1)

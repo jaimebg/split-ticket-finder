@@ -12,12 +12,16 @@ checkout should keep them passing, as long as every file learns about it.
 """
 
 import configparser
+import json
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
-DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
+ROOT = Path(__file__).resolve().parent.parent
+DEPLOY = ROOT / "deploy"
+CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 SERVICE = "split-ticket-finder"
 INSTALL_DIR = "/opt/split-ticket-finder"
@@ -40,7 +44,6 @@ def update_sh() -> str:
 def test_every_artifact_is_present():
     assert sorted(p.name for p in DEPLOY.iterdir()) == [
         f"{SERVICE}-update.service",
-        f"{SERVICE}-update.timer",
         f"{SERVICE}.service",
         "update.sh",
     ]
@@ -85,18 +88,6 @@ def test_update_unit_runs_the_script_from_the_checkout_it_updates():
     assert INSTALL_DIR in service["ReadWritePaths"].split()
 
 
-def test_timer_drives_the_update_unit_it_ships_beside():
-    # A timer takes its unit from its own filename, so the two names have to
-    # stay in step: split-ticket-finder-update.timer runs
-    # split-ticket-finder-update.service.
-    assert (DEPLOY / f"{SERVICE}-update.timer").exists()
-    assert (DEPLOY / f"{SERVICE}-update.service").exists()
-
-    timer = _unit(f"{SERVICE}-update.timer")
-    assert "Timer" in timer
-    assert timer["Install"]["WantedBy"] == "timers.target"
-
-
 @pytest.mark.parametrize(
     ("variable", "expected"),
     [
@@ -105,6 +96,7 @@ def test_timer_drives_the_update_unit_it_ships_beside():
         ("RUN_AS", RUN_AS),
         ("BRANCH", "main"),
         ("API_REPO", "jaimebg/split-ticket-finder"),
+        ("DEPLOY_CHECK", "deploy"),
     ],
 )
 def test_update_script_defaults_match_the_units(update_sh, variable, expected):
@@ -127,3 +119,69 @@ def test_update_script_refuses_a_commit_whose_ci_has_not_passed(update_sh):
     # server; the check defaults on, and a drop-in has to opt out of it.
     assert "REQUIRE_GREEN_CI=${REQUIRE_GREEN_CI:-1}" in update_sh
     assert "--ff-only" in update_sh
+
+
+@pytest.fixture(scope="module")
+def ci_yml() -> str:
+    return CI.read_text()
+
+
+def _job(ci_yml: str, job: str) -> str:
+    """The body of one top-level job in ci.yml, up to the next job."""
+    match = re.search(rf"^  {job}:\n((?:    .*\n|\n)*)", ci_yml, re.M)
+    assert match, f"no {job} job in ci.yml"
+    return match.group(1)
+
+
+def test_deploy_job_runs_only_after_the_tests_on_main(ci_yml):
+    deploy = _job(ci_yml, "deploy")
+
+    assert "needs: test" in deploy
+    assert "github.ref == 'refs/heads/main'" in deploy
+    assert "github.event_name != 'pull_request'" in deploy
+
+
+def test_deploy_job_name_is_the_check_the_updater_skips(ci_yml, update_sh):
+    # The updater checks CI while the deploy job that started it is still
+    # running. It skips that one check run by name; if the two drift apart,
+    # every push-triggered deploy waits on itself and never ships.
+    name = re.search(r"^    name: (\S+)$", _job(ci_yml, "deploy"), re.M).group(1)
+    assert f"DEPLOY_CHECK=${{DEPLOY_CHECK:-{name}}}" in update_sh
+
+
+def _ci_is_green(tmp_path, runs) -> bool:
+    """Run update.sh's ci_is_green against a stubbed GitHub API response."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl = bin_dir / "curl"
+    curl.write_text(f"#!/bin/sh\ncat <<'JSON'\n{json.dumps({'check_runs': runs})}\nJSON\n")
+    curl.chmod(0o755)
+
+    # Everything but the trailing `main "$@"`, so the functions load without
+    # running a deploy.
+    script = (DEPLOY / "update.sh").read_text().replace('\nmain "$@"\n', "\n")
+    result = subprocess.run(
+        ["bash", "-c", f'{script}\nci_is_green deadbeef'],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _run(name, status="completed", conclusion="success"):
+    return {"name": name, "status": status, "conclusion": conclusion}
+
+
+@pytest.mark.parametrize(
+    ("runs", "green"),
+    [
+        ([_run("test (3.12)"), _run("deploy", "in_progress", None)], True),
+        ([_run("test (3.12)", conclusion="failure"), _run("deploy", "in_progress", None)], False),
+        ([_run("test (3.12)", "in_progress", None)], False),
+        ([_run("deploy", "in_progress", None)], False),
+        ([], False),
+    ],
+    ids=["tests-pass", "tests-fail", "tests-running", "only-deploy", "no-runs"],
+)
+def test_ci_is_green_ignores_only_the_running_deploy_job(tmp_path, runs, green):
+    assert _ci_is_green(tmp_path, runs) is green
