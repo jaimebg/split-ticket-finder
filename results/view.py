@@ -213,7 +213,7 @@ def summary(meta: SearchMeta, stored: StoredResults, filters: Filters,
 
 # ── Detail ───────────────────────────────────────────────────────────────────
 
-def _bags(o: Offer) -> str:
+def bags_text(o: Offer) -> str:
     cabin = ("cabin unknown" if o.included_cabin_bags is None
              else f"{o.included_cabin_bags} cabin")
     if o.included_checked_bags is None:
@@ -252,7 +252,7 @@ def _ticket(number: int, o: Offer | None, discount: Decimal, currency: str,
         lines.append(f"  {esc(s.flight_no)} {esc(s.carrier_name)}{when} · {fmt_dur(s.duration)}")
 
     stops = "direct" if o.stops == 0 else f"{o.stops} stop{'s' if o.stops > 1 else ''}"
-    lines.append(f"  {stops} · {fmt_dur(o.duration)} · bags: {_bags(o)}")
+    lines.append(f"  {stops} · {fmt_dur(o.duration)} · bags: {bags_text(o)}")
     if o.booking_url:
         lines.append(f'  <a href="{esc(o.booking_url)}">Book this ticket</a>')
     return lines

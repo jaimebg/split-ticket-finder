@@ -202,3 +202,15 @@ def test_env_example_parses_and_documents_the_risk_thresholds():
     assert (values["PRICE_HISTORY_DAYS"], values["SPARK_POINTS"],
             values["ALERT_MIN_CHECKS"]) == ("30", "20", "5")
     assert not [ln for ln in lines if ln.startswith("`")], "plan text pasted into the template"
+
+
+def test_the_mcp_server_is_an_optional_extra_with_a_console_script():
+    """The bot's production install (pip install -e .) must not pull mcp."""
+    import re
+
+    text = (DEPLOY.parent / "pyproject.toml").read_text()
+    core = re.search(r"^dependencies = \[(.*?)\]", text, re.S | re.M).group(1)
+    assert "mcp" not in core
+    assert re.search(r'^mcp = \["mcp>=2\.2,<3"\]', text, re.M)
+    assert 'split-ticket-mcp = "split_ticket_mcp.server:main"' in text
+    assert '"split_ticket_mcp*"' in text

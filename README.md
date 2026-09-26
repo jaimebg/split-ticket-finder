@@ -376,6 +376,43 @@ Google parser is pinned against a recorded HTML capture; the Kiwi client is
 pinned against recorded JSON, plus a network-marked drift guard that
 introspects the live schema and fails if a field the client reads has moved.
 
+## Use it from an AI assistant (MCP)
+
+The engine is also a local [Model Context Protocol](https://modelcontextprotocol.io)
+server, so Claude Code, Claude Desktop or any MCP client can search split
+tickets for you. It runs on your machine over stdio, is read-only, and needs
+no bot token.
+
+```bash
+pip install -e ".[mcp]"
+claude mcp add split-tickets -- /path/to/split-ticket-finder/.venv/bin/split-ticket-mcp
+```
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "split-tickets": {
+      "command": "/path/to/split-ticket-finder/.venv/bin/split-ticket-mcp",
+      "env": { "ORIGIN": "LPA", "PROVIDERS": "kiwi,google" }
+    }
+  }
+}
+```
+
+It reads the checkout's own `.env` (next to `config.py`) wherever it is launched from;
+`env` overrides individual settings. Three tools:
+
+| Tool | What it does | Cost |
+|---|---|---|
+| `find_airports` | "Tokio" → NRT, HND | 1 request |
+| `price_calendar` | cheapest price per day for one route | 1 request |
+| `search_split_tickets` | the full search, with legs, links, connection risk and savings | ~90–190 requests |
+
+Try: *"Find me the cheapest way from Gran Canaria to Tokyo in late October
+for two adults, and avoid tight connections."*
+
 ## Deployment
 
 The bot runs as a systemd service under an unprivileged account. Every push to
