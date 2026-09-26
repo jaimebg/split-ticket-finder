@@ -288,3 +288,25 @@ def test_every_screen_fits_one_telegram_message():
     for text, _ in (summary(META, big, Filters(), 3), detail(META, big, 0, 1),
                     filters_screen(META, big, Filters())):
         assert len(text) <= 4000
+
+
+# ── Final review fixes ──────────────────────────────────────────────────────
+
+def test_a_v2_result_without_its_own_through_fare_claims_no_saving():
+    """The row's through_fare belongs to the best itinerary's destination and
+    date. Borrowing it for another trip would quote a saving against a fare
+    that was never priced for that trip."""
+    meta = replace(META, fallback_through_fare=Decimal("800"))
+    other = standard_one_way(date="2026-10-20", dest="KIX")
+    stored = StoredResults([standard_one_way(through_fare="800"), other], True)
+
+    assert "Save" not in detail(meta, stored, 1, 1)[0]
+    only_other = summary(meta, stored, Filters(), 1)
+    assert "Save 275.00" in only_other[0]          # the best's own fare still counts
+    hidden_best = StoredResults([other], True)
+    assert "Save" not in summary(meta, hidden_best, Filters(), 1)[0]
+
+
+def test_the_row_fare_still_backs_an_undetailed_legacy_row():
+    meta = replace(META, fallback_through_fare=Decimal("800"))
+    assert "Save" in detail(meta, StoredResults([standard_one_way()], False), 0, 1)[0]

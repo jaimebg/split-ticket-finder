@@ -124,3 +124,15 @@ def test_dict_round_trip_and_tolerance():
     assert Filters.from_dict(None) == Filters()
     assert Filters.from_dict({"max_stops": 9, "exclude": [3, "FR"]}) == Filters(
         exclude=frozenset({"FR"}))
+
+
+def test_an_impossible_connection_never_passes_the_journey_time_filter():
+    """A negative buffer (second ticket leaves before the first lands) must
+    not shorten the journey into passing: the trip cannot be flown at all."""
+    impossible = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", "2026-10-01T14:00")),
+        onward=offer("500", seg("MAD", "NRT", "2026-10-01T10:00", "2026-10-01T19:00",
+                                duration=540)),
+    )
+    assert impossible.buffer_out.total_seconds() < 0
+    assert _shown([impossible], Filters(max_hours=24)) == []

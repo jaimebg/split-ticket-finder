@@ -104,6 +104,10 @@ def journey_minutes(first: Offer | None, buffer: timedelta | None,
     """
     if first is None or second is None or buffer is None:
         return None
+    if buffer < timedelta(0):
+        # The second ticket leaves before the first lands: there is no
+        # journey to time. Adding the negative gap would understate it.
+        return None
     return first.duration + int(buffer.total_seconds() // 60) + second.duration
 
 

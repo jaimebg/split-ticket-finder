@@ -93,6 +93,18 @@ def _gap(delta: timedelta) -> str:
     return fmt_dur(int(delta.total_seconds() // 60))
 
 
+def _fallback_fare(meta: SearchMeta, stored: StoredResults) -> Decimal | None:
+    """The row-level through-fare, only for rows that stored no per-trip fare.
+
+    ``searches.through_fare`` is the fare for the *best* itinerary's
+    destination and date. A detailed (v2) itinerary carries its own fare or
+    none at all; borrowing the best's would quote a saving against a fare
+    never priced for that trip. Only legacy rows, which stored no per-trip
+    fare, fall back to it.
+    """
+    return None if stored.detailed else meta.fallback_through_fare
+
+
 def savings_text(itin: Itinerary, currency: str, fallback: Decimal | None) -> str | None:
     """One line comparing *itin* with the single through-ticket, or None.
 
@@ -132,7 +144,7 @@ def summary(meta: SearchMeta, stored: StoredResults, filters: Filters,
     if shown:
         best = shown[0][1]
         head = f"Best <b>{_money(best.total, meta.currency)}</b>"
-        saving = savings_text(best, meta.currency, meta.fallback_through_fare)
+        saving = savings_text(best, meta.currency, _fallback_fare(meta, stored))
         parts.append(f"{head}\n{saving}" if saving else head)
     if meta.strategy == STRATEGY_GRID and meta.window_days:
         parts.append(f"<i>Sampled {meta.sampled_dates} of {meta.window_days} days — "
@@ -273,7 +285,7 @@ def detail(meta: SearchMeta, stored: StoredResults, index: int,
 
     if itin.requires_bag_recheck is True:
         parts.append("⚠️ You must collect and re-check bags between tickets.")
-    saving = savings_text(itin, cur, meta.fallback_through_fare)
+    saving = savings_text(itin, cur, _fallback_fare(meta, stored))
     if saving:
         parts.append(saving)
     if itin.discount > 0:
