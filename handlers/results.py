@@ -20,10 +20,10 @@ import secrets
 
 from telegram import Update
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes
+from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
-from db import get_search_by_id, save_search
+from db import get_search_by_id, save_search, set_search_view
 from engine import run_search
 from engine.orchestrator import STRATEGY_GRID, STRATEGY_TWO_STAGE
 from handlers.anchor import render_anchor
@@ -301,3 +301,88 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     token.cancel()
     await query.answer("Cancelling…")
+
+
+_GONE = "That search is no longer stored."
+
+
+def _view_state(row: dict) -> dict:
+    try:
+        state = json.loads(row.get("view_json") or "{}")
+    except ValueError:
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str,
+                rows: Rows) -> None:
+    await render_anchor(context.bot, update.effective_chat.id,
+                        update.callback_query.message.message_id, text, rows)
+
+
+@owner_only_callback
+async def on_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every r:<id>:... button. Reads the search back from the database, so
+    buttons keep working across restarts (spec §1)."""
+    query = update.callback_query
+    parts = query.data.split(":")
+    if len(parts) < 3 or not parts[1].isdigit():
+        await query.answer()
+        await _show(update, context, _GONE, view.MENU_ROWS)
+        return
+    search_id, action, args = int(parts[1]), parts[2], parts[3:]
+
+    if action == "n":
+        await query.answer()
+        return
+
+    row = await get_search_by_id(search_id)
+    stored = store.load(row.get("results")) if row else None
+    if not row or not stored.itineraries:
+        await query.answer()
+        await _show(update, context, _GONE, view.MENU_ROWS)
+        return
+
+    meta = view.SearchMeta.from_row(row)
+    state = _view_state(row)
+    filters = Filters.from_dict(state.get("filters"))
+    page = state.get("page") if isinstance(state.get("page"), int) else 1
+
+    try:
+        if action == "p":
+            page = int(args[0])
+            await set_search_view(search_id, {"filters": filters.to_dict(), "page": page})
+            text, rows = view.summary(meta, stored, filters, page)
+        elif action == "d":
+            index = int(args[0])
+            if not 0 <= index < len(stored.itineraries):
+                raise LookupError(index)
+            text, rows = view.detail(meta, stored, index, page)
+        elif action == "f" and not stored.detailed:
+            text, rows = view.summary(meta, stored, Filters(), 1)
+        elif action == "f":
+            if args == ["clear"]:
+                filters = Filters()
+            elif len(args) == 2:
+                filters = filters.with_setting(args[0], args[1])
+            elif args:
+                raise LookupError(args)
+            if args:
+                await set_search_view(search_id, {"filters": filters.to_dict(), "page": 1})
+            text, rows = view.filters_screen(meta, stored, filters)
+        else:
+            raise LookupError(action)
+    except (LookupError, ValueError):
+        await query.answer()
+        await _show(update, context, _GONE, view.MENU_ROWS)
+        return
+
+    await query.answer()
+    await _show(update, context, text, rows)
+
+
+def get_results_handlers() -> list[CallbackQueryHandler]:
+    return [
+        CallbackQueryHandler(on_results, pattern=r"^r:\d+:"),
+        CallbackQueryHandler(on_cancel, pattern=r"^x:[0-9a-f]+$"),
+    ]

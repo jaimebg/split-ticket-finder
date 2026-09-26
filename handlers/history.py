@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
+import handlers.results as results_module
 from config import DEFAULT_HUBS, ORIGIN
 from db import get_search_by_id, get_searches
+from handlers.anchor import markup
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
-from handlers.utils import esc, load_json_list, split_message
+from handlers.utils import esc, load_json_list
+from results import view
+from results.filters import Filters
 from results.store import load
 
 logger = logging.getLogger(__name__)
@@ -61,8 +64,6 @@ async def history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @owner_only_callback
 async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View stored results for a past search."""
-    from search import format_results
-
     query = update.callback_query
     await query.answer()
 
@@ -73,33 +74,25 @@ async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.edit_message_text("Search not found.", reply_markup=MAIN_MENU_KEYBOARD)
         return
 
-    itineraries = load(row.get("results")).itineraries
-    if not itineraries:
+    stored = load(row.get("results"))
+    if not stored.itineraries:
         await query.edit_message_text(
             "No results stored for this search.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
 
-    row_through_fare = row.get("through_fare")
-    through_fare = Decimal(str(row_through_fare)) if row_through_fare is not None else None
-    text = format_results(
-        itineraries, row.get("origin") or ORIGIN, row.get("currency") or "EUR",
-        through_fare=through_fare,
-    )
-
-    chunks = split_message(text)
-    await query.edit_message_text(chunks[0], parse_mode="HTML", disable_web_page_preview=True)
-    for chunk in chunks[1:]:
-        await query.message.reply_text(
-            chunk, parse_mode="HTML", disable_web_page_preview=True
-        )
+    state = results_module._view_state(row)
+    text, rows = view.summary(view.SearchMeta.from_row(row), stored,
+                              Filters.from_dict(state.get("filters")), 1)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup(rows),
+                                  disable_web_page_preview=True)
 
 
 @owner_only_callback
 async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Rerun a past search with the same parameters."""
-    from handlers.results import run_and_report
+    from handlers.results import RUNS_KEY, run_and_report
 
     query = update.callback_query
     await query.answer()
@@ -142,7 +135,8 @@ async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     context.application.create_task(
-        run_and_report(context.application.bot, update.effective_chat.id, params),
+        run_and_report(context.application.bot, update.effective_chat.id, params,
+                       runs=context.application.bot_data.setdefault(RUNS_KEY, {})),
         update=update,
     )
 

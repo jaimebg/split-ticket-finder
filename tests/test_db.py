@@ -445,3 +445,13 @@ async def test_save_search_records_the_strategy(temp_db):
     row = await db_module.get_search_by_id(search_id)
     assert row["strategy"] == "grid"
     assert row["view_json"] is None
+
+
+async def test_set_search_view_round_trips(temp_db):
+    search_id = await db_module.save_search(
+        origin="LPA", destinations=["NRT"], dates=["2026-10-01"], hubs=["MAD"],
+        adults=1, currency="EUR", best_price=None, best_route=None, results=None,
+    )
+    await db_module.set_search_view(search_id, {"filters": {"max_stops": 0}, "page": 2})
+    row = await db_module.get_search_by_id(search_id)
+    assert json.loads(row["view_json"]) == {"filters": {"max_stops": 0}, "page": 2}

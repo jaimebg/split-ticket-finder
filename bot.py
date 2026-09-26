@@ -19,6 +19,7 @@ from config import BOT_TOKEN, OWNER_ID
 from db import init_db
 from handlers.favorites import get_favorites_handlers
 from handlers.history import get_history_handlers
+from handlers.results import get_results_handlers
 from handlers.search import build_search_conversation
 from handlers.start import main_menu_callback, start_command
 from scheduler import scheduler_loop
@@ -76,6 +77,10 @@ def main() -> None:
 
     # ── 3. Favorites callback handlers ─────────────────────────────
     for handler in get_favorites_handlers():
+        app.add_handler(handler)
+
+    # ── 3b. Results view and Cancel ────────────────────────────────
+    for handler in get_results_handlers():
         app.add_handler(handler)
 
     # ── 4. Main-menu fallback (Back button) ────────────────────────

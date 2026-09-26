@@ -231,6 +231,14 @@ async def get_search_by_id(search_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def set_search_view(search_id: int, view: dict) -> None:
+    """Store the results view state (filters, page) for one search."""
+    async with _connect() as db:
+        await db.execute("UPDATE searches SET view_json = ? WHERE id = ?",
+                         (_json(view), search_id))
+        await db.commit()
+
+
 # ── Favorites ────────────────────────────────────────────────────────────────
 
 async def add_favorite(
