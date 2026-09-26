@@ -24,7 +24,8 @@ from handlers.utils import esc, split_message
 from models import SearchWindow
 from providers.base import SupportsCalendar
 from providers.registry import primary_provider
-from search import format_results, itineraries_to_json, scan_to_json
+from results import store
+from search import format_results, scan_to_json
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +202,7 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
             disable_web_page_preview=True,
         )
 
-    results_data = json.loads(itineraries_to_json(itineraries)) if itineraries else None
+    results_data = store.serialize(itineraries) if itineraries else None
     # scan_to_json(None) is the JSON literal "null" -> json.loads gives None,
     # so this is safe for both strategies without branching on result.scan here.
     scan_data = json.loads(scan_to_json(result.scan))
@@ -222,6 +223,7 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
         through_fare=best.through_fare if best else None,
         results=results_data,
         scan_json=scan_data,
+        strategy=result.strategy,
     )
 
     if not best:

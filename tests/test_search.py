@@ -14,7 +14,7 @@ from decimal import Decimal
 from engine.scan import CalendarGrid
 from models import Itinerary, add_days
 from providers.base import Offer, RatedPrice
-from search import format_results, itineraries_to_json, scan_to_json
+from search import format_results, scan_to_json
 
 
 def _offer(price: str, *, booking_url: str | None = "https://book.example/x",
@@ -236,29 +236,6 @@ def test_discount_reminder_omitted_when_nothing_shown_is_discounted():
 
 
 # ── Serialization ─────────────────────────────────────────────────────────────
-
-
-def test_itineraries_to_json_caps_at_25_entries():
-    itins = [_estimate_itin(date=f"2026-09-{d:02d}") for d in range(1, 40, 1)][:40]
-    assert len(json.loads(itineraries_to_json(itins))) == 25
-
-
-def test_itineraries_to_json_round_trips_key_fields():
-    itin = _confirmed_itin().with_through_fare(Decimal("980"))
-    stored = json.loads(itineraries_to_json([itin]))[0]
-
-    assert stored["date"] == "2026-09-01"
-    assert stored["hub"] == "MAD"
-    assert stored["dest"] == "NRT"
-    assert stored["total"] == 525.0
-    assert stored["through_fare"] == 980.0
-    assert stored["status"] == "confirmed"
-
-
-def test_itineraries_to_json_records_no_through_fare_as_none_not_zero():
-    stored = json.loads(itineraries_to_json([_confirmed_itin()]))[0]
-    assert stored["through_fare"] is None
-    assert stored["savings"] is None
 
 
 # ── scan_to_json (Task 12 follow-up: wire the phase-0 calendar grid) ────────

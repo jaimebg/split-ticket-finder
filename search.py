@@ -21,42 +21,6 @@ _CENTS = Decimal("0.01")
 
 # ── JSON serializers ─────────────────────────────────────────────────────────
 
-def itineraries_to_json(itineraries: list[Itinerary]) -> str:
-    """Serialize the top 25 itineraries to a compact JSON string for DB storage.
-
-    Real ``Offer`` objects (booking links, exact flight numbers, segments)
-    are not carried into storage — only the derived prices and metadata a
-    redisplay needs. A row reloaded from this JSON is always rendered as an
-    estimate (see ``handlers/history.py``'s reconstruction), which is
-    honest: the numbers are a historical snapshot, not a fresh, bookable
-    quote.
-    """
-    top = itineraries[:25]
-    data = [
-        {
-            "date": it.date,
-            "return_date": it.return_date,
-            "hub": it.hub,
-            "hub_name": it.hub_name,
-            "dest": it.dest,
-            "dest_name": it.dest_name,
-            "discount": float(it.discount),
-            "dom_price": float(it.dom_price),
-            "dom_discounted": float(it.dom_discounted),
-            "onward_price": float(it.onward_price),
-            "total": float(it.total),
-            "status": it.status,
-            "through_fare": float(it.through_fare) if it.through_fare is not None else None,
-            "savings": float(it.savings) if it.savings is not None else None,
-            "savings_pct": it.savings_pct,
-            "requires_bag_recheck": it.requires_bag_recheck,
-            "providers": list(it.providers),
-        }
-        for it in top
-    ]
-    return json.dumps(data, ensure_ascii=False)
-
-
 def scan_to_json(scan: CalendarGrid | None) -> str:
     """Serialize phase 0's calendar grid to a compact JSON string for DB storage.
 

@@ -10,6 +10,7 @@ from config import ORIGIN
 from db import add_favorite, delete_favorite, get_favorites, get_search_by_id
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
 from handlers.utils import esc, format_favorite, load_json_list
+from results.store import load
 
 logger = logging.getLogger(__name__)
 
@@ -86,27 +87,27 @@ async def save_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    results = load_json_list(row.get("results"))
-    if not results:
+    itineraries = load(row.get("results")).itineraries
+    if not itineraries:
         await query.edit_message_text(
             "That search has no stored results to track.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
 
-    best = results[0]
+    best = min(itineraries, key=lambda it: it.total)
     trip_days = row.get("trip_days") or 0
     # Track every date the search covered, so the scheduler can sample across
     # them instead of re-checking a single day forever.
-    check_dates = [str(d) for d in load_json_list(row.get("dates"))] or [best["date"]]
+    check_dates = [str(d) for d in load_json_list(row.get("dates"))] or [best.date]
 
     await add_favorite(
         origin=row.get("origin") or ORIGIN,
-        hub=best["hub"],
-        destination=best["dest"],
+        hub=best.hub,
+        destination=best.dest,
         adults=row.get("adults") or 1,
         currency=row.get("currency") or "EUR",
-        price=best.get("total"),
+        price=float(best.total),
         check_dates=check_dates,
         trip_days=trip_days,
         # The provider that actually priced this search, so the scheduler can
@@ -119,10 +120,10 @@ async def save_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     trip_str = f"round-trip, {trip_days} days" if trip_days else "one-way"
-    price_str = f" at {best['total']:,.0f} {row.get('currency') or 'EUR'}" if best.get("total") else ""
+    price_str = f" at {best.total:,.0f} {row.get('currency') or 'EUR'}"
     await query.edit_message_text(
-        f"Now tracking <b>{esc(row.get('origin') or ORIGIN)} -> {esc(best['hub'])} "
-        f"-> {esc(best['dest'])}</b> ({trip_str}){price_str}.\n\n"
+        f"Now tracking <b>{esc(row.get('origin') or ORIGIN)} -> {esc(best.hub)} "
+        f"-> {esc(best.dest)}</b> ({trip_str}){price_str}.\n\n"
         f"Checking {len(check_dates)} date(s); you'll get an alert when the price drops.",
         parse_mode="HTML",
         reply_markup=MAIN_MENU_KEYBOARD,

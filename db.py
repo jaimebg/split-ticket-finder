@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS searches (
     best_route  TEXT,
     through_fare REAL,              -- single-ticket baseline (Decimal, stored as REAL)
     results     TEXT,               -- JSON blob
-    scan_json    TEXT               -- phase 0 calendar grid, JSON blob
+    scan_json    TEXT,              -- phase 0 calendar grid, JSON blob
+    strategy     TEXT,              -- "two-stage" | "grid"; NULL = unknown (pre-3b)
+    view_json    TEXT               -- results view state: filters and page; NULL = defaults
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -116,6 +118,10 @@ MIGRATIONS = (
     ("favorites", "children", "INTEGER NOT NULL DEFAULT 0"),
     ("favorites", "max_stops", "INTEGER"),
     ("favorites", "min_layover", "INTEGER"),
+    # Layer 3b: the results view's per-search state, and which strategy
+    # produced the numbers (the grid samples dates; the view says so).
+    ("searches", "strategy", "TEXT"),
+    ("searches", "view_json", "TEXT"),
 )
 
 
@@ -154,6 +160,7 @@ async def save_search(
     provider: str | None = None,
     through_fare: Decimal | None = None,
     scan_json: object | None = None,
+    strategy: str | None = None,
 ) -> int:
     """Insert a completed search and return its row id.
 
@@ -168,7 +175,7 @@ async def save_search(
     and must be reconstructed via `Decimal(str(value))` on read, which is
     exact for the 2-decimal-place amounts this column holds. *scan_json* is
     phase 0's calendar grid, stored so a past search can be redisplayed
-    without re-querying.
+    without re-querying. *strategy* is the engine's SearchResult.strategy.
     """
     async with _connect() as db:
         cursor = await db.execute(
@@ -176,8 +183,8 @@ async def save_search(
             INSERT INTO searches
                 (origin, destinations, dates, hubs, adults, currency, trip_days,
                  window_start, window_end, provider,
-                 best_price, best_route, through_fare, results, scan_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 best_price, best_route, through_fare, results, scan_json, strategy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin,
@@ -195,6 +202,7 @@ async def save_search(
                 float(through_fare) if through_fare is not None else None,
                 _json(results) if results is not None else None,
                 _json(scan_json) if scan_json is not None else None,
+                strategy,
             ),
         )
         await db.commit()

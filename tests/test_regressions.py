@@ -12,10 +12,10 @@ from decimal import Decimal
 import pytest
 
 import db as db_module
-from handlers.history import _itinerary_from_dict
 from handlers.utils import ValidationError, esc, parse_date, parse_date_list, split_message
 from models import Itinerary, generate_dates
-from search import format_results, itineraries_to_json
+from results.store import _itinerary_from_dict, load, serialize
+from search import format_results
 
 
 def _days_from_now(days: int) -> str:
@@ -77,16 +77,13 @@ def test_date_list_is_deduplicated_and_sorted():
 
 
 def test_stored_round_trip_survives_the_json_round_trip():
-    stored = json.loads(itineraries_to_json([_round_trip_itinerary()]))[0]
-    assert stored["return_date"] == "2026-09-15"
-
-    restored = _itinerary_from_dict(stored)
+    restored = load(json.dumps(serialize([_round_trip_itinerary()]))).itineraries[0]
     assert restored.return_date == "2026-09-15", "return_date must survive storage"
 
 
 def test_stored_round_trip_still_renders_as_round_trip():
-    stored = json.loads(itineraries_to_json([_round_trip_itinerary()]))[0]
-    rendered = format_results([_itinerary_from_dict(stored)], "LPA")
+    restored = load(json.dumps(serialize([_round_trip_itinerary()]))).itineraries[0]
+    rendered = format_results([restored], "LPA")
 
     assert "Round-trip" in rendered
     assert "One-way" not in rendered
@@ -102,7 +99,7 @@ def test_legacy_route_shaped_row_loads_without_crashing():
     ``discount``/``onward_price`` keys at all -- only the old Route field
     names (dom_price, dom_discounted, intl_price, total, hub_name, ...).
     This is a hand-written fixture matching that exact shape (taken from the
-    live db's stored ``results`` blob), not the current itineraries_to_json
+    live db's stored ``results`` blob), not the current results.store.serialize
     output.
     """
     legacy_row = {

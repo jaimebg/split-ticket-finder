@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import db as db_module
 import handlers.start as start_module
 from handlers.favorites import save_favorite
+from results.store import serialize
+from tests.results_fixtures import standard_one_way
 
 _OWNER_ID = 918273645
 
@@ -47,7 +49,7 @@ async def _save_search_with(db_kwargs) -> int:
         "origin": "LPA", "destinations": ["NRT"], "dates": ["2026-09-01"], "hubs": ["MAD"],
         "adults": 1, "currency": "EUR", "best_price": 505.0,
         "best_route": "LPA->MAD->NRT 2026-09-01",
-        "results": [{"hub": "MAD", "dest": "NRT", "date": "2026-09-01", "total": 505.0}],
+        "results": serialize([standard_one_way(date="2026-09-01")]),
         "trip_days": 0,
     }
     defaults.update(db_kwargs)
@@ -84,3 +86,18 @@ async def test_save_favorite_leaves_provider_unset_when_the_search_predates_it(
 
     fav = (await db_module.get_favorites())[0]
     assert fav["provider"] is None
+
+
+async def test_save_favorite_tracks_the_cheapest_stored_result(temp_db, monkeypatch):
+    monkeypatch.setattr(start_module, "OWNER_ID", _OWNER_ID)
+    search_id = await _save_search_with({
+        "results": serialize([standard_one_way(date="2026-09-01", through_fare="900"),
+                              standard_one_way(date="2026-09-02", hub="BCN",
+                                               discount="1")]),
+    })
+
+    await save_favorite(_update(f"savefav_{search_id}"), None)
+
+    fav = (await db_module.get_favorites())[0]
+    assert fav["hub"] == "BCN"            # 500.00 beats 525.00
+    assert fav["record_price"] == 500.0

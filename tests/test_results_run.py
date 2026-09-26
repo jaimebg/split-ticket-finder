@@ -16,7 +16,6 @@ directly as the pure functions they are.
 """
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -28,6 +27,7 @@ from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_
 from handlers.results import _oversized_window_message, run_and_report
 from models import Itinerary
 from providers.base import Offer
+from results.store import load
 
 
 class FakeBot:
@@ -94,6 +94,7 @@ def fake_engine(monkeypatch):
             parse_errors=state["parse_errors"],
             fetch_errors=state["fetch_errors"],
             scan=state["scan"],
+            strategy="two-stage",
         )
 
     monkeypatch.setattr(results_module, "run_search", fake_run_search)
@@ -149,7 +150,7 @@ async def test_fixed_date_search_returns_results_only_on_requested_dates(
     assert "2026-09-15" not in sent_text
 
     stored = (await db_module.get_searches(1))[0]
-    stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
+    stored_result_dates = {it.date for it in load(stored["results"]).itineraries}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
 
 
@@ -171,7 +172,7 @@ async def test_two_date_selection_19_days_apart_does_not_return_an_in_between_da
     await run_and_report(bot, chat_id=1, params=params)
 
     stored = (await db_module.get_searches(1))[0]
-    stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
+    stored_result_dates = {it.date for it in load(stored["results"]).itineraries}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
     assert "2026-09-09" not in stored_result_dates
 
@@ -190,7 +191,7 @@ async def test_a_date_the_user_asked_for_is_never_dropped_by_filtering(temp_db, 
     best_message = bot.messages[-1]
     assert "2026-09-01" in best_message or "2026-09-20" in best_message  # a "Track" offer exists
     stored = (await db_module.get_searches(1))[0]
-    stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
+    stored_result_dates = {it.date for it in load(stored["results"]).itineraries}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
 
 
