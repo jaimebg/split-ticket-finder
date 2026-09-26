@@ -28,7 +28,7 @@ import handlers.results as results_module
 from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
 from handlers.results import _oversized_window_message, run_and_report
 from models import Itinerary
-from providers.base import Offer
+from providers.base import Offer, SearchOptions
 from results.store import load
 
 
@@ -467,3 +467,53 @@ async def test_a_failed_progress_edit_does_not_stop_the_search(temp_db, monkeypa
                          message_id=42, interval=0.01)
 
     assert "1 routes" in bot.messages[-1]
+
+
+class _GoogleLike(_FakeCalendarProvider):
+    from providers.base import Capabilities
+    capabilities = Capabilities(cabins=frozenset({"ECONOMY"}), children=False,
+                                min_layover=False)
+
+
+async def test_an_option_the_source_cannot_search_is_refused_before_searching(
+    temp_db, fake_engine, monkeypatch,
+):
+    """Review Focus #1: a rerun of a Business search on a Google-only
+    deployment says why it can't run -- never "No routes found"."""
+    monkeypatch.setattr(results_module, "primary_provider", lambda: _GoogleLike())
+    bot = FakeBot()
+
+    await run_and_report(bot, chat_id=1, params=_base_params(cabin="BUSINESS"))
+
+    assert bot.messages[-1] == "Your flight source can't search Business class."
+    assert fake_engine["calls"] == []
+    assert await db_module.get_searches(1) == []
+
+
+async def test_a_provider_error_escaping_the_engine_is_explained(temp_db, monkeypatch):
+    from providers.base import ProviderError
+
+    async def raising_run_search(**kwargs):
+        raise ProviderError("Google cannot express cabin 'BUSINESS'")
+
+    monkeypatch.setattr(results_module, "run_search", raising_run_search)
+    monkeypatch.setattr(results_module, "primary_provider", lambda: _FakeCalendarProvider())
+    bot = FakeBot()
+
+    await run_and_report(bot, chat_id=1, params=_base_params())
+
+    assert "can't run this search" in bot.messages[-1]
+    assert "check the bot logs" not in bot.messages[-1]
+
+
+async def test_the_options_are_searched_and_stored(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]
+    params = _base_params(dates=["2026-09-01"], adults=2, children=1, cabin="BUSINESS",
+                          currency="USD", max_stops=1, min_layover=60)
+
+    await run_and_report(FakeBot(), chat_id=1, params=params)
+
+    assert fake_engine["calls"][0]["options"] == SearchOptions(
+        adults=2, children=1, cabin="BUSINESS", currency="USD", max_stops=1, min_layover=60)
+    row = (await db_module.get_searches(1))[0]
+    assert SearchOptions.from_mapping(row) == fake_engine["calls"][0]["options"]

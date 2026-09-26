@@ -74,6 +74,7 @@ CREATE TABLE price_checks (
 
 SEARCHES_NEW_COLUMNS = {
     "window_start", "window_end", "provider", "through_fare", "scan_json", "strategy", "view_json",
+    "children", "cabin", "max_stops", "min_layover",
 }
 FAVORITES_NEW_COLUMNS = {"provider", "cabin", "children", "max_stops", "min_layover"}
 
@@ -455,3 +456,14 @@ async def test_set_search_view_round_trips(temp_db):
     await db_module.set_search_view(search_id, {"filters": {"max_stops": 0}, "page": 2})
     row = await db_module.get_search_by_id(search_id)
     assert json.loads(row["view_json"]) == {"filters": {"max_stops": 0}, "page": 2}
+
+
+async def test_save_search_records_the_options(temp_db):
+    search_id = await db_module.save_search(
+        origin="LPA", destinations=["NRT"], dates=["2026-10-01"], hubs=["MAD"],
+        adults=2, currency="USD", best_price=None, best_route=None, results=None,
+        children=1, cabin="BUSINESS", max_stops=1, min_layover=90,
+    )
+    row = await db_module.get_search_by_id(search_id)
+    assert (row["children"], row["cabin"], row["max_stops"], row["min_layover"]) == \
+        (1, "BUSINESS", 1, 90)

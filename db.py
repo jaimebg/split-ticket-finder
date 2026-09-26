@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS searches (
     results     TEXT,               -- JSON blob
     scan_json    TEXT,              -- phase 0 calendar grid, JSON blob
     strategy     TEXT,              -- "two-stage" | "grid"; NULL = unknown (pre-3b)
-    view_json    TEXT               -- results view state: filters and page; NULL = defaults
+    view_json    TEXT,              -- results view state: filters and page; NULL = defaults
+    children     INTEGER,           -- NULL = 0 (pre-3c)
+    cabin        TEXT,              -- CabinClassType; NULL = ECONOMY
+    max_stops    INTEGER,           -- NULL = no limit
+    min_layover  INTEGER            -- minutes; NULL = no minimum
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -122,6 +126,12 @@ MIGRATIONS = (
     # produced the numbers (the grid samples dates; the view says so).
     ("searches", "strategy", "TEXT"),
     ("searches", "view_json", "TEXT"),
+    # Layer 3c: the rest of the query shape, so reruns replay it exactly.
+    # No SQL defaults: NULL means "the default", read by SearchOptions.
+    ("searches", "children", "INTEGER"),
+    ("searches", "cabin", "TEXT"),
+    ("searches", "max_stops", "INTEGER"),
+    ("searches", "min_layover", "INTEGER"),
 )
 
 
@@ -161,6 +171,10 @@ async def save_search(
     through_fare: Decimal | None = None,
     scan_json: object | None = None,
     strategy: str | None = None,
+    children: int = 0,
+    cabin: str = "ECONOMY",
+    max_stops: int | None = None,
+    min_layover: int | None = None,
 ) -> int:
     """Insert a completed search and return its row id.
 
@@ -176,6 +190,8 @@ async def save_search(
     exact for the 2-decimal-place amounts this column holds. *scan_json* is
     phase 0's calendar grid, stored so a past search can be redisplayed
     without re-querying. *strategy* is the engine's SearchResult.strategy.
+    *children*, *cabin*, *max_stops* and *min_layover* complete the query shape
+    (see SearchOptions).
     """
     async with _connect() as db:
         cursor = await db.execute(
@@ -183,8 +199,9 @@ async def save_search(
             INSERT INTO searches
                 (origin, destinations, dates, hubs, adults, currency, trip_days,
                  window_start, window_end, provider,
-                 best_price, best_route, through_fare, results, scan_json, strategy)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 best_price, best_route, through_fare, results, scan_json, strategy,
+                 children, cabin, max_stops, min_layover)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin,
@@ -203,6 +220,10 @@ async def save_search(
                 _json(results) if results is not None else None,
                 _json(scan_json) if scan_json is not None else None,
                 strategy,
+                children,
+                cabin,
+                max_stops,
+                min_layover,
             ),
         )
         await db.commit()

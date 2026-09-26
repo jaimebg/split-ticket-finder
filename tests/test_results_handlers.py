@@ -283,3 +283,29 @@ async def test_tracking_a_stale_index_changes_nothing(temp_db):
     sid = await _saved(serialize([standard_one_way()]))
     await _tap(f"r:{sid}:t:9")
     assert await db_module.get_favorites() == []
+
+
+async def test_history_rerun_replays_every_option(temp_db):
+    from handlers.history import history_rerun
+    from providers.base import SearchOptions
+
+    sid = await _saved(None, adults=2, children=1, cabin="BUSINESS", currency="USD",
+                       max_stops=1, min_layover=60)
+    scheduled = []
+    ctx = _context()
+    ctx.application.create_task = lambda coro, update=None: scheduled.append(coro)
+
+    class Query(FakeQuery):
+        async def edit_message_text(self, text, **kw):
+            pass
+
+    update = SimpleNamespace(callback_query=Query(f"hist_rerun_{sid}"),
+                             effective_user=SimpleNamespace(id=_OWNER_ID),
+                             effective_chat=SimpleNamespace(id=1))
+    await history_rerun(update, ctx)
+
+    coro = scheduled[0]
+    params = coro.cr_frame.f_locals["params"]
+    coro.close()
+    assert SearchOptions.from_mapping(params) == SearchOptions(
+        adults=2, children=1, cabin="BUSINESS", currency="USD", max_stops=1, min_layover=60)
