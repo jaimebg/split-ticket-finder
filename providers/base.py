@@ -183,6 +183,7 @@ class SearchOptions:
     currency: str = "EUR"
     max_stops: int | None = None
     min_layover: int | None = None      # minutes
+    overnight: bool = False             # domestic legs a day early (out) / late (back)
 
     @property
     def passengers(self) -> int:
@@ -215,7 +216,7 @@ class SearchOptions:
         return {
             "adults": self.adults, "children": self.children, "cabin": self.cabin,
             "currency": self.currency, "max_stops": self.max_stops,
-            "min_layover": self.min_layover,
+            "min_layover": self.min_layover, "overnight": self.overnight,
         }
 
     @classmethod
@@ -230,6 +231,7 @@ class SearchOptions:
             adults=get("adults", 1), children=get("children", 0),
             cabin=get("cabin", "ECONOMY"), currency=get("currency", "EUR"),
             max_stops=m.get("max_stops"), min_layover=m.get("min_layover"),
+            overnight=bool(m.get("overnight") or False),
         )
 
     def party_label(self) -> str:

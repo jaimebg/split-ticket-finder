@@ -208,3 +208,10 @@ def test_calendar_queries_carry_the_search_limits():
     c = SearchOptions(max_stops=0, min_layover=120).calendar_query(
         "MAD", "NRT", "2026-10-01", "2026-10-31")
     assert (c.max_stops, c.min_layover) == (0, 120)
+
+
+def test_overnight_round_trips_through_the_columns():
+    opts = SearchOptions(overnight=True)
+    assert opts.as_columns()["overnight"] is True
+    assert SearchOptions.from_mapping({"overnight": 1}) == opts
+    assert SearchOptions.from_mapping({"overnight": None}).overnight is False

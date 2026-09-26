@@ -70,3 +70,12 @@ def test_nothing_stored_loads_as_empty():
     assert load(None) == StoredResults(itineraries=[], detailed=False)
     assert load("not json") == StoredResults(itineraries=[], detailed=False)
     assert load('{"v": 99}') == StoredResults(itineraries=[], detailed=False)
+
+
+def test_overnight_survives_storage_and_old_rows_default_to_off():
+    """Review Focus #4."""
+    night = standard_one_way(overnight=True)
+    assert _round_trip([night]).itineraries[0].overnight is True
+    raw = serialize([standard_one_way()])
+    del raw["itineraries"][0]["overnight"]
+    assert load(json.dumps(raw)).itineraries[0].overnight is False

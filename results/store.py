@@ -112,6 +112,7 @@ def _itinerary_to_dict(it: Itinerary) -> dict:
         "est_onward_price": _money(it.est_onward_price),
         "through_fare": _money(it.through_fare),
         "providers": list(it.providers),
+        "overnight": it.overnight,
         # Derived, for anyone reading the column by hand. load() ignores them.
         "total": _money(it.total),
         "status": it.status,
@@ -131,6 +132,7 @@ def _itinerary_from_v2(d: dict) -> Itinerary:
         est_onward_price=_decimal(d.get("est_onward_price")),
         through_fare=_decimal(d.get("through_fare")),
         providers=tuple(d.get("providers", ())),
+        overnight=bool(d.get("overnight", False)),
         **{leg: _offer_from_dict(d.get(leg)) for leg in _LEGS},
     )
 

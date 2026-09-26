@@ -87,7 +87,7 @@ def test_to_params_matches_what_run_and_report_takes():
 
     assert set(params) == {"origin", "destinations", "dates", "hubs",
                            "adults", "currency", "trip_days",
-                           "children", "cabin", "max_stops", "min_layover"}
+                           "children", "cabin", "max_stops", "min_layover", "overnight"}
     assert params["origin"] == "LPA"
     assert params["destinations"] == {"NRT": "Tokyo Narita"}
     assert params["hubs"] == {"MAD": "Madrid"}

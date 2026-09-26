@@ -133,6 +133,20 @@ class Candidate:
     dom_price: Decimal                  # undiscounted, both directions if round-trip
     onward_price: Decimal
     discount: Decimal                   # fraction taken off the domestic leg
+    # A night at the hub: domestic legs a day early (out) / late (back).
+    overnight: bool = False
+
+    @property
+    def dom_date(self) -> str:
+        """The domestic outbound's day: the day before the onward flight overnight."""
+        return add_days(self.date, -1) if self.overnight else self.date
+
+    @property
+    def dom_return_date(self) -> str:
+        """The domestic return's day: the day after the onward return overnight."""
+        if not self.return_date:
+            return ""
+        return add_days(self.return_date, 1) if self.overnight else self.return_date
 
     @property
     def dom_discounted(self) -> Decimal:
@@ -181,6 +195,19 @@ class Itinerary:
     est_onward_price: Decimal | None = None
     through_fare: Decimal | None = None
     providers: tuple[str, ...] = ()
+    overnight: bool = False
+
+    @property
+    def dom_date(self) -> str:
+        """The domestic outbound's day: the day before the onward flight overnight."""
+        return add_days(self.date, -1) if self.overnight else self.date
+
+    @property
+    def dom_return_date(self) -> str:
+        """The domestic return's day: the day after the onward return overnight."""
+        if not self.return_date:
+            return ""
+        return add_days(self.return_date, 1) if self.overnight else self.return_date
 
     @property
     def confirmed(self) -> bool:
@@ -324,6 +351,7 @@ class Itinerary:
             discount=candidate.discount,
             est_dom_price=candidate.dom_price,
             est_onward_price=candidate.onward_price,
+            overnight=candidate.overnight,
         )
 
 
