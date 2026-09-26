@@ -12,6 +12,7 @@ from db import get_search_by_id, get_searches
 from handlers.anchor import markup
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
 from handlers.utils import esc, load_json_list
+from providers.base import SearchOptions
 from results import view
 from results.filters import Filters
 from results.store import load
@@ -122,8 +123,7 @@ async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "destinations": {c: c for c in dest_codes},
         "dates": dates,
         "hubs": {c: DEFAULT_HUBS.get(c, c) for c in hub_codes},
-        "adults": row.get("adults") or 1,
-        "currency": row.get("currency") or "EUR",
+        **SearchOptions.from_mapping(row).as_columns(),
         "trip_days": row.get("trip_days") or 0,
     }
 

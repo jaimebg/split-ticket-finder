@@ -34,7 +34,7 @@ from decimal import Decimal
 from engine.fetch import LegFetcher
 from engine.shortlist import legs_for
 from models import Candidate, Itinerary
-from providers.base import LegQuery, Offer
+from providers.base import LegQuery, Offer, SearchOptions
 
 PHASE = "Phase 1"
 PHASE_THROUGH_FARE = "Phase 2"
@@ -56,8 +56,7 @@ async def confirm(
     dest_names: dict[str, str],
     discount_airports: set[str],
     discount: Decimal,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
 ) -> list[Itinerary]:
     """Confirm ``candidates`` against real offers, re-pricing from them.
 
@@ -68,11 +67,9 @@ async def confirm(
     domestic and onward return too when ``trip_days > 0`` -- is dropped
     rather than emitted with a missing side reading as free.
 
-    Only ``adults`` and ``currency`` are forwarded onto each ``LegQuery``;
-    ``min_layover``, ``children`` and ``cabin`` are left at their defaults
-    because this function accepts no such parameters, and ``GoogleProvider``
-    raises a bare ``ProviderError`` -- aborting the whole phase -- for any of
-    them being set, which would break a Google-only deployment.
+    Every option in ``options`` is forwarded onto each ``LegQuery``. An option
+    the provider can't express is refused before the search starts (see
+    ``providers.base.Capabilities``), so it never reaches this phase.
 
     The domestic-leg discount applies only when ``hub in discount_airports``;
     every other candidate's domestic leg pays full price. Results are sorted
@@ -82,8 +79,7 @@ async def confirm(
     """
     legs = legs_for(candidates, origin=origin, trip_days=trip_days)
     queries = [
-        LegQuery(origin=leg_origin, dest=leg_dest, date=leg_date,
-                  adults=adults, currency=currency)
+        options.leg_query(leg_origin, leg_dest, leg_date)
         for leg_origin, leg_dest, leg_date in legs
     ]
     offers_by_leg = await fetcher.fetch_many(queries, phase=PHASE)
@@ -149,8 +145,7 @@ async def through_fares(
     origin: str,
     trip_days: int,
     dates_limit: int = 3,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
 ) -> dict[tuple[str, str], Decimal]:
     """Price the through-fare baseline for the cheapest itineraries, honestly.
 
@@ -189,13 +184,15 @@ async def through_fares(
         if itin.date in dates:
             pairs.setdefault((itin.dest, itin.date), itin.return_date)
 
+    # The single ticket is priced for the same party, cabin and currency but
+    # without stop/layover limits: the split always connects at the hub, so a
+    # limited baseline (e.g. direct only) would almost never exist.
+    baseline = options.without_limits()
     queries: list[LegQuery] = []
     for (dest, date), return_date in pairs.items():
-        queries.append(LegQuery(origin=origin, dest=dest, date=date,
-                                  adults=adults, currency=currency))
+        queries.append(baseline.leg_query(origin, dest, date))
         if round_trip:
-            queries.append(LegQuery(origin=dest, dest=origin, date=return_date,
-                                      adults=adults, currency=currency))
+            queries.append(baseline.leg_query(dest, origin, return_date))
 
     offers_by_leg = await fetcher.fetch_many(queries, phase=PHASE_THROUGH_FARE)
 

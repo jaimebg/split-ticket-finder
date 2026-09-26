@@ -29,7 +29,9 @@ from config import (
     REQUEST_TIMEOUT,
 )
 from providers.base import (
+    ALL_CABINS,
     CalendarQuery,
+    Capabilities,
     LegQuery,
     Offer,
     Place,
@@ -154,6 +156,24 @@ def build_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(headers=HEADERS, timeout=REQUEST_TIMEOUT)
 
 
+def _limits_filter(max_stops: int | None, min_layover: int | None) -> dict:
+    """The ItinerariesFilterInput keys for the search limits, shared by the
+    itinerary search and the price calendar (both honour them, verified live)."""
+    flt: dict = {"transportTypes": ["FLIGHT"]}
+    if max_stops is not None:
+        flt["maxStopsCount"] = max_stops
+    if min_layover is not None:
+        # stopoverTime is expressed in HOURS. Passing seconds or minutes
+        # here does not error -- it silently matches nothing. Flooring to
+        # whole hours is deliberate: it asks the API for a superset (e.g.
+        # 90 minutes -> "at least 1 hour"), and the exact per-offer
+        # min_layover computed in _to_offer enforces the real minute
+        # threshold afterwards. Ceiling would instead silently drop valid
+        # offers just above the floor (e.g. a 90-119 minute connection).
+        flt["stopoverTime"] = {"start": max(0, min_layover // 60), "end": 48}
+    return flt
+
+
 class KiwiProvider:
     """Kiwi.com behind the shared provider interface.
 
@@ -161,6 +181,8 @@ class KiwiProvider:
     """
 
     name = "kiwi"
+    capabilities = Capabilities(cabins=frozenset(ALL_CABINS), children=True,
+                                min_layover=True)
 
     def __init__(self, client: httpx.AsyncClient | None = None, partner: str | None = None):
         self._client = client
@@ -257,18 +279,7 @@ class KiwiProvider:
             self._client = None
 
     def _leg_filter(self, query: LegQuery) -> dict:
-        flt: dict = {"limit": query.limit, "transportTypes": ["FLIGHT"]}
-        if query.max_stops is not None:
-            flt["maxStopsCount"] = query.max_stops
-        if query.min_layover is not None:
-            # stopoverTime is expressed in HOURS. Passing seconds or minutes
-            # here does not error -- it silently matches nothing. Flooring to
-            # whole hours is deliberate: it asks the API for a superset (e.g.
-            # 90 minutes -> "at least 1 hour"), and the exact per-offer
-            # min_layover computed in _to_offer enforces the real minute
-            # threshold afterwards. Ceiling would instead silently drop valid
-            # offers just above the floor (e.g. a 90-119 minute connection).
-            flt["stopoverTime"] = {"start": max(0, query.min_layover // 60), "end": 48}
+        flt: dict = {"limit": query.limit, **_limits_filter(query.max_stops, query.min_layover)}
         if query.exclude_carriers:
             flt["excludeCarriers"] = list(query.exclude_carriers)
         return flt
@@ -372,7 +383,7 @@ class KiwiProvider:
                 "passengers": {"adults": query.adults, "children": query.children},
                 "cabinClass": {"cabinClass": query.cabin},
             },
-            "filter": {"transportTypes": ["FLIGHT"]},
+            "filter": _limits_filter(query.max_stops, query.min_layover),
             "options": self._options(query.currency),
         }
         node = await self._execute(

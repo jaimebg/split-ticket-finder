@@ -88,7 +88,7 @@ from models import (
     ProgressCallback,
     SearchWindow,
 )
-from providers.base import FlightProvider, ProviderError, SupportsCalendar
+from providers.base import FlightProvider, ProviderError, SearchOptions, SupportsCalendar
 from providers.registry import enabled_providers, primary_provider
 
 logger = logging.getLogger(__name__)
@@ -292,8 +292,7 @@ async def _cross_check(
     trip_days: int,
     hub_names: dict[str, str],
     dest_names: dict[str, str],
-    adults: int,
-    currency: str,
+    options: SearchOptions,
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
     concurrency: int | None = None,
@@ -353,7 +352,7 @@ async def _cross_check(
             fetcher, candidates, origin=origin, trip_days=trip_days,
             hub_names=hub_names, dest_names=dest_names,
             discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
-            adults=adults, currency=currency,
+            options=options,
         )
     except ProviderError:
         logger.warning(
@@ -384,8 +383,7 @@ async def _run_two_stage(
     hubs: dict[str, str],
     window: SearchWindow,
     trip_days: int,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
     concurrency: int | None = None,
@@ -397,7 +395,7 @@ async def _run_two_stage(
     _check_cancel(cancel)
     grid = await scan_calendars(
         provider, origin=origin, hubs=list(hubs), dests=list(destinations),
-        window=window, trip_days=trip_days, adults=adults, currency=currency,
+        window=window, trip_days=trip_days, options=options,
         concurrency=resolved_concurrency, delay=resolved_delay, cancel=cancel,
         on_progress=on_progress,
     )
@@ -420,7 +418,7 @@ async def _run_two_stage(
         fetcher, shortlist, origin=origin, trip_days=trip_days,
         hub_names=hubs, dest_names=destinations,
         discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
-        adults=adults, currency=currency,
+        options=options,
     )
     if best is not None:
         best.set_confirmed_from(itineraries)
@@ -428,7 +426,7 @@ async def _run_two_stage(
     _check_cancel(cancel)
     fares = await through_fares(
         fetcher, itineraries, origin=origin, trip_days=trip_days,
-        dates_limit=THROUGH_FARE_DATES, adults=adults, currency=currency,
+        dates_limit=THROUGH_FARE_DATES, options=options,
     )
     itineraries = _attach_through_fares(itineraries, fares)
 
@@ -445,8 +443,7 @@ async def _run_grid(
     hubs: dict[str, str],
     window: SearchWindow,
     trip_days: int,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
     cancel: CancelToken | None,
     on_progress: ProgressCallback | None,
     dates: list[str] | None = None,
@@ -478,7 +475,7 @@ async def _run_grid(
         fetcher, origin=origin, dests=list(destinations), hubs=list(hubs),
         window=window, trip_days=trip_days, hub_names=hubs, dest_names=destinations,
         discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
-        adults=adults, currency=currency, max_dates=FALLBACK_MAX_DATES,
+        options=options, max_dates=FALLBACK_MAX_DATES,
         explicit_dates=dates,
     )
     if best is not None:
@@ -488,7 +485,7 @@ async def _run_grid(
     relabel.retitle({PHASE_THROUGH_FARE: GRID_THROUGH_FARE_PHASE})
     fares = await through_fares(
         fetcher, itineraries, origin=origin, trip_days=trip_days,
-        dates_limit=THROUGH_FARE_DATES, adults=adults, currency=currency,
+        dates_limit=THROUGH_FARE_DATES, options=options,
     )
     itineraries = _attach_through_fares(itineraries, fares)
 
@@ -502,8 +499,7 @@ async def run_search(
     hubs: dict[str, str],
     window: SearchWindow,
     trip_days: int,
-    adults: int = 1,
-    currency: str = "EUR",
+    options: SearchOptions | None = None,
     provider: FlightProvider | None = None,
     cancel: CancelToken | None = None,
     on_progress: ProgressCallback | None = None,
@@ -519,6 +515,9 @@ async def run_search(
     search itself and the dicts themselves (``hubs``, ``destinations``) for
     display names -- that adaptation happens here, once, rather than pushed
     onto callers.
+
+    ``options`` carries passengers, cabin, currency and search limits to every
+    query; ``None`` is ``SearchOptions()``, today's defaults.
 
     ``provider`` defaults to ``providers.registry.primary_provider()``.
     Strategy is chosen by capability alone:
@@ -561,6 +560,7 @@ async def run_search(
     error, it silently prices fewer days than asked for. The grid strategy
     never consults a calendar, so it is exempt from that check entirely.
     """
+    options = options if options is not None else SearchOptions()
     if provider is None:
         provider = primary_provider()
 
@@ -590,7 +590,7 @@ async def run_search(
         strategy = STRATEGY_TWO_STAGE
         itineraries, scan, parse_errors, fetch_errors = await _run_two_stage(
             provider, origin=origin, destinations=destinations, hubs=hubs,
-            window=window, trip_days=trip_days, adults=adults, currency=currency,
+            window=window, trip_days=trip_days, options=options,
             cancel=cancel, on_progress=on_progress, concurrency=concurrency, delay=delay,
             best=best,
         )
@@ -598,14 +598,14 @@ async def run_search(
         strategy = STRATEGY_GRID
         itineraries, scan, parse_errors, fetch_errors = await _run_grid(
             provider, origin=origin, destinations=destinations, hubs=hubs,
-            window=window, trip_days=trip_days, adults=adults, currency=currency,
+            window=window, trip_days=trip_days, options=options,
             cancel=cancel, on_progress=on_progress, dates=dates,
             concurrency=concurrency, delay=delay, best=best,
         )
 
     tagged, xc_parse_errors, xc_fetch_errors = await _cross_check(
         itineraries, provider, secondary, origin=origin, trip_days=trip_days,
-        hub_names=hubs, dest_names=destinations, adults=adults, currency=currency,
+        hub_names=hubs, dest_names=destinations, options=options,
         cancel=cancel, on_progress=on_progress, concurrency=concurrency, delay=delay,
     )
 

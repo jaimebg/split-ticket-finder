@@ -596,8 +596,7 @@ async def test_load_ratings_caches_under_the_key_dates_screen_reads(monkeypatch)
 
     await builder._load_ratings(context, draft)
 
-    dest = draft.dest_codes[0]
-    key = f"{dest}:{_FUTURE_YEAR}-{_FUTURE_MONTH}"
+    key = builder._ratings_key(draft, _FUTURE_YEAR, _FUTURE_MONTH)
     assert context.user_data[builder._RATINGS][key] == {_FUTURE_RATED_DAY: "CHEAP"}
 
     # _dates_screen must land on the exact same key -- the coloured cell is
@@ -620,7 +619,7 @@ async def test_load_ratings_swallows_a_provider_error_and_renders_uncoloured(mon
 
     await builder._load_ratings(context, draft)  # must not raise
 
-    key = f"{draft.dest_codes[0]}:{_FUTURE_YEAR}-{_FUTURE_MONTH}"
+    key = builder._ratings_key(draft, _FUTURE_YEAR, _FUTURE_MONTH)
     assert context.user_data[builder._RATINGS][key] is builder._RATINGS_FAILED
 
     text, rows = builder._dates_screen(context, draft)
@@ -677,7 +676,7 @@ async def test_load_ratings_failure_does_not_poison_the_cache(monkeypatch):
     draft = _draft(destinations=(("NRT", "Tokyo"),))
 
     await builder._load_ratings(context, draft)
-    key = f"{draft.dest_codes[0]}:{_FUTURE_YEAR}-{_FUTURE_MONTH}"
+    key = builder._ratings_key(draft, _FUTURE_YEAR, _FUTURE_MONTH)
     assert context.user_data[builder._RATINGS][key] is builder._RATINGS_FAILED
 
     # The outage clears.
@@ -688,3 +687,74 @@ async def test_load_ratings_failure_does_not_poison_the_cache(monkeypatch):
 
     assert context.user_data[builder._RATINGS][key] == {_FUTURE_RATED_DAY: "CHEAP"}
     assert len(provider.calls) == 2, "the second visit must hit the provider again"
+
+
+async def test_an_options_tap_edits_the_draft_and_redraws(monkeypatch):
+    from providers.base import ALL_CABINS, Capabilities
+
+    class Kiwi:
+        name = "kiwi"
+        capabilities = Capabilities(cabins=frozenset(ALL_CABINS), children=True,
+                                    min_layover=True)
+
+    monkeypatch.setattr(builder, "primary_provider", lambda: Kiwi())
+    context = _context()
+    _set_draft(context, _draft(screen=builder.SCREEN_OPTIONS))
+    update = _cb_update("o:c:BUSINESS")
+
+    await builder.option_tap(update, context)
+
+    assert context.user_data[builder._DRAFT].cabin == "BUSINESS"
+    assert context.bot.edits or context.bot.sends
+
+
+async def test_a_refused_options_tap_alerts_and_keeps_the_draft(monkeypatch):
+    from providers.base import Capabilities
+
+    class GoogleLike:
+        name = "google"
+        capabilities = Capabilities(cabins=frozenset({"ECONOMY"}), children=False,
+                                    min_layover=False)
+
+    monkeypatch.setattr(builder, "primary_provider", lambda: GoogleLike())
+    context = _context()
+    draft = _draft(screen=builder.SCREEN_OPTIONS)
+    _set_draft(context, draft)
+    update = _cb_update("o:c:BUSINESS")
+
+    await builder.option_tap(update, context)
+
+    assert context.user_data[builder._DRAFT] == draft
+    assert update.callback_query.answers == [
+        ("Your flight source can't search Business class.", True)]
+
+
+
+async def test_the_date_signal_is_priced_for_the_draft_s_options(monkeypatch):
+    """The calendar colours come from the same query shape the search will
+    use: party, cabin and limits included."""
+    provider = _FakeCalendarProvider(table={})
+    monkeypatch.setattr(builder, "primary_provider", lambda: provider)
+    context = _context()
+    context.user_data[builder._MONTH] = (_FUTURE_YEAR, _FUTURE_MONTH)
+    draft = _draft(destinations=(("NRT", "Tokyo"),), adults=2, children=1,
+                   cabin="BUSINESS", currency="USD", max_stops=0)
+
+    await builder._load_ratings(context, draft)
+
+    q = provider.calls[0]
+    assert (q.adults, q.children, q.cabin, q.currency, q.max_stops) == \
+        (2, 1, "BUSINESS", "USD", 0)
+
+
+async def test_changing_the_options_reprices_the_date_signal(monkeypatch):
+    provider = _FakeCalendarProvider(table={})
+    monkeypatch.setattr(builder, "primary_provider", lambda: provider)
+    context = _context()
+    context.user_data[builder._MONTH] = (_FUTURE_YEAR, _FUTURE_MONTH)
+    economy = _draft(destinations=(("NRT", "Tokyo"),))
+
+    await builder._load_ratings(context, economy)
+    await builder._load_ratings(context, economy.with_(cabin="BUSINESS"))
+
+    assert [q.cabin for q in provider.calls] == ["ECONOMY", "BUSINESS"]

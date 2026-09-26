@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import json
 import logging
 import random
@@ -14,6 +15,7 @@ import httpx
 
 from config import MAX_RETRIES, REQUEST_TIMEOUT, SOCS_COOKIE
 from providers.base import (
+    Capabilities,
     LegQuery,
     Offer,
     ProviderError,
@@ -427,6 +429,10 @@ class GoogleProvider:
     """
 
     name = "google"
+    # encode_tfs hardcodes economy and adults only, and Google's per-airport
+    # local times can't be differenced across a connection.
+    capabilities = Capabilities(cabins=frozenset({"ECONOMY"}), children=False,
+                                min_layover=False)
 
     def __init__(self, client: httpx.AsyncClient | None = None):
         self._client = client
@@ -465,6 +471,12 @@ class GoogleProvider:
         )
         flights = parse_flights(html)
         offers = [_to_offer(f, query) for f in flights]
+
+        # Google quotes per person; every Offer.price is the party's total
+        # (Kiwi's already are). Children can't reach here, so adults is the
+        # whole party. checked_bag_price is per bag and stays as it is.
+        if query.adults > 1:
+            offers = [dataclasses.replace(o, price=o.price * query.adults) for o in offers]
 
         if query.max_stops is not None:
             offers = [o for o in offers if o.stops <= query.max_stops]

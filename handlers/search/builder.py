@@ -31,6 +31,7 @@ from handlers.anchor import render_anchor
 from handlers.results import RUNS_KEY, _estimate_queries, run_and_report
 from handlers.search import dates as dates_mod
 from handlers.search import hubs as hubs_mod
+from handlers.search import options as options_mod
 from handlers.search import places as places_mod
 from handlers.search.draft import (
     AWAIT_DEST,
@@ -42,6 +43,7 @@ from handlers.search.draft import (
     SCREEN_DEST,
     SCREEN_DRAFT,
     SCREEN_HUBS,
+    SCREEN_OPTIONS,
     SCREEN_TRIP,
     Button,
     Rows,
@@ -49,7 +51,7 @@ from handlers.search.draft import (
 )
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only, owner_only_callback
 from handlers.utils import ValidationError, parse_positive_int
-from providers.base import ProviderError, SupportsCalendar
+from providers.base import ProviderError, SupportsCalendar, capabilities_of
 from providers.registry import primary_provider
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,8 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             results=context.user_data.get(_RESULTS, []),
             term=context.user_data.get(_TERM, ""),
         )
+    elif draft.screen == SCREEN_OPTIONS:
+        text, rows = options_mod.render(draft, capabilities_of(primary_provider()))
     elif draft.screen == SCREEN_TRIP:
         text, rows = _trip_screen()
     else:
@@ -131,13 +135,20 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def _dates_screen(context, draft: SearchDraft) -> tuple[str, Rows]:
     year, month = context.user_data.get(_MONTH, _current_month())
     dest = draft.dest_codes[0] if draft.destinations else None
-    cached = context.user_data.get(_RATINGS, {}).get(f"{dest}:{year}-{month}")
+    cached = context.user_data.get(_RATINGS, {}).get(_ratings_key(draft, year, month))
     failed = cached is _RATINGS_FAILED
     ratings = None if failed else cached
     rows = dates_mod.month_rows(year, month, draft=draft, today=_today(),
                                 ratings=ratings)
     dest_code = dest if (cached is not None and not failed) else None
     return dates_mod.caption(draft, dest_code=dest_code, signal_failed=failed), rows
+
+
+def _ratings_key(draft: SearchDraft, year: int, month: int) -> str:
+    """The ratings cache key. It includes the options, so changing the party,
+    cabin or limits prices the signal again instead of showing stale colours."""
+    dest = draft.dest_codes[0] if draft.destinations else None
+    return f"{dest}:{year}-{month}:{draft.options}"
 
 
 def _current_month() -> tuple[int, int]:
@@ -218,7 +229,7 @@ async def edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     field = query.data.split(":", 1)[1]
 
     screens = {"dest": SCREEN_DEST, "trip": SCREEN_TRIP,
-               "dates": SCREEN_DATES, "hubs": SCREEN_HUBS}
+               "dates": SCREEN_DATES, "hubs": SCREEN_HUBS, "opts": SCREEN_OPTIONS}
     awaiting = {"dest": AWAIT_DEST, "hubs": AWAIT_HUBS}
 
     draft = _draft_of(context).with_(screen=screens[field],
@@ -252,22 +263,18 @@ async def _load_ratings(context, draft: SearchDraft) -> None:
 
     year, month = context.user_data.get(_MONTH, _current_month())
     dest = draft.dest_codes[0]
-    key = f"{dest}:{year}-{month}"
+    key = _ratings_key(draft, year, month)
     cache = context.user_data.setdefault(_RATINGS, {})
     if key in cache and cache[key] is not _RATINGS_FAILED:
         return
 
     import calendar as _cal
 
-    from providers.base import CalendarQuery
-
     last = _cal.monthrange(year, month)[1]
     try:
-        table = await provider.price_calendar(CalendarQuery(
-            origin=draft.origin, dest=dest,
-            start=f"{year:04d}-{month:02d}-01",
-            end=f"{year:04d}-{month:02d}-{last:02d}",
-            adults=draft.adults, currency=draft.currency,
+        table = await provider.price_calendar(draft.options.calendar_query(
+            draft.origin, dest,
+            f"{year:04d}-{month:02d}-01", f"{year:04d}-{month:02d}-{last:02d}",
         ))
     except ProviderError as exc:
         logger.info("No date ratings for %s (%s) — signal unavailable this visit.",
@@ -521,6 +528,23 @@ async def go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 @owner_only_callback
+async def option_tap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """One tap on the options screen. A refused tap alerts and changes nothing."""
+    query = update.callback_query
+    if query.data == "o:n":
+        await query.answer()
+        return BUILDING
+    result = options_mod.apply(_draft_of(context), query.data,
+                               capabilities_of(primary_provider()))
+    if isinstance(result, str):
+        await query.answer(result, show_alert=True)
+        return BUILDING
+    await query.answer()
+    _store(context, result)
+    return await _show(update, context)
+
+
+@owner_only_callback
 async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """A padding or header cell. Telegram needs an answer or it spins."""
     await update.callback_query.answer()
@@ -572,6 +596,7 @@ def build_search_conversation() -> ConversationHandler:
                 CallbackQueryHandler(back, pattern="^back$"),
                 CallbackQueryHandler(reset, pattern="^reset$"),
                 CallbackQueryHandler(go, pattern="^go$"),
+                CallbackQueryHandler(option_tap, pattern=r"^o:"),
                 CallbackQueryHandler(to_menu, pattern="^menu_main$"),
                 # NOOP is imported from dates.py rather than hardcoded here so
                 # the padding-cell callback data and this router pattern can

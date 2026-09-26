@@ -178,3 +178,39 @@ def test_a_real_places_request_still_returns_airports():
     assert node is not None, "places query returned no data"
     assert node.get("__typename") == "PlaceConnection", node
     assert node["edges"], "places came back empty for a well-known city"
+
+
+def test_cabin_class_values_are_still_the_four_we_send():
+    """SearchOptions.cabin is sent verbatim as CabinClassType."""
+    from providers.base import ALL_CABINS
+
+    q = 'query { __type(name: "CabinClassType") { enumValues { name } } }'
+    response = httpx.post(ENDPOINT, headers=HEADERS, json={"query": q}, timeout=30)
+    values = {v["name"] for v in response.json()["data"]["__type"]["enumValues"]}
+    assert set(ALL_CABINS) <= values
+
+
+async def test_the_price_calendar_still_honours_the_stop_limit():
+    """Phase 0 relies on this to shortlist dates a direct-only search can
+    actually confirm. If Kiwi stopped honouring maxStopsCount here, a
+    direct search would quietly rank one-stop prices again."""
+    from datetime import date, timedelta
+
+    from providers.base import CalendarQuery
+    from providers.kiwi import KiwiProvider
+
+    start = date.today() + timedelta(days=30)
+    query = CalendarQuery(origin="MAD", dest="NRT", start=str(start),
+                          end=str(start + timedelta(days=13)))
+    provider = KiwiProvider()
+    try:
+        any_stops = await provider.price_calendar(query)
+        direct = await provider.price_calendar(
+            CalendarQuery(**{**query.__dict__, "max_stops": 0}))
+    finally:
+        await provider.aclose()
+
+    assert any_stops, "MAD->NRT has flights every day"
+    assert len(direct) < len(any_stops) or any(
+        direct[d].price > any_stops[d].price for d in direct), (
+        "direct-only priced exactly like any-stops: the limit is being ignored")

@@ -8,7 +8,7 @@ both, so every screen is tested without a bot.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -24,7 +24,7 @@ from models import (
     fmt_dur,
     ground_time,
 )
-from providers.base import Offer
+from providers.base import Offer, SearchOptions
 from results.filters import BUFFER_CHOICES, HOURS_CHOICES, Filters, apply, carriers
 from results.store import StoredResults
 
@@ -51,6 +51,7 @@ class SearchMeta:
     sampled_dates: int
     window_days: int | None
     fallback_through_fare: Decimal | None
+    options: SearchOptions = field(default_factory=SearchOptions)
 
     @classmethod
     def from_row(cls, row: dict) -> SearchMeta:
@@ -70,6 +71,7 @@ class SearchMeta:
             sampled_dates=len(load_json_list(row.get("dates"))),
             window_days=window_days,
             fallback_through_fare=Decimal(str(fare)) if fare is not None else None,
+            options=SearchOptions.from_mapping(row),
         )
 
 
@@ -138,6 +140,8 @@ def summary(meta: SearchMeta, stored: StoredResults, filters: Filters,
     sid = meta.search_id
 
     trip = "round-trip" if meta.round_trip else "one-way"
+    if not meta.options.is_default_party:
+        trip += f" · {esc(meta.options.party_label())}"
     dests = ", ".join(esc(d) for d in meta.destinations) or "?"
     parts = [f"<b>{esc(meta.origin)} → {dests}</b> · {trip} · "
              f"{len(stored.itineraries)} routes"]
@@ -254,8 +258,11 @@ def detail(meta: SearchMeta, stored: StoredResults, index: int,
     itin = stored.itineraries[index]
     cur = meta.currency
     trip = "round-trip" if itin.return_date else "one-way"
+    n = meta.options.passengers
+    party = f" · total for {n} passengers" if n > 1 else ""
     parts = [
-        f"<b>{_money(itin.total, cur, 2)}</b> · {trip}{_MARKERS.get(itin.status, '')}\n"
+        f"<b>{_money(itin.total, cur, 2)}</b> · {trip}{_MARKERS.get(itin.status, '')}"
+        f"{party}\n"
         f"{esc(meta.origin)} → {esc(itin.hub)} ({esc(itin.hub_name)}) → "
         f"{esc(itin.dest)} ({esc(itin.dest_name)})\n{_dates(itin)}",
     ]

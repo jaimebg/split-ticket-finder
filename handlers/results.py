@@ -31,7 +31,7 @@ from handlers.search.draft import Button, Rows
 from handlers.start import owner_only_callback
 from handlers.utils import esc, load_json_list
 from models import CancelToken, Progress, SearchCancelled, SearchWindow
-from providers.base import SupportsCalendar
+from providers.base import ProviderError, SearchOptions, SupportsCalendar, capabilities_of
 from providers.registry import primary_provider
 from results import store, view
 from results.filters import Filters
@@ -192,6 +192,13 @@ async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | N
     dates = params["dates"]
     window = SearchWindow(start=min(dates), end=max(dates))
     currency = params["currency"]
+    options = SearchOptions.from_mapping(params)
+    refusal = capabilities_of(primary_provider()).rejects(options)
+    if refusal is not None:
+        # Checked here, not only in the builder: a history rerun or an old
+        # button can carry an option this deployment's provider can't run.
+        await render_anchor(bot, chat_id, message_id, refusal, view.MENU_ROWS)
+        return
 
     run_id = secrets.token_hex(4)
     cancel = CancelToken()
@@ -211,14 +218,19 @@ async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | N
             hubs=params["hubs"],
             window=window,
             trip_days=params.get("trip_days", 0),
-            adults=params["adults"],
-            currency=currency,
+            options=options,
             dates=dates,
             cancel=cancel,
             on_progress=progress.tick,
         )
     except SearchCancelled:
         failure = "Search cancelled."
+    except ProviderError:
+        # A bare ProviderError means the provider can't express this query
+        # at all. It is a capability gap, not a failure, and must never read
+        # as "No routes found".
+        logger.warning("Provider cannot run the search %s", params, exc_info=True)
+        failure = "Your flight source can't run this search with these options."
     except ValueError as exc:
         # run_search's ValueError (an oversized window on a history rerun) is
         # written for a human, so it is shown verbatim (review finding I6).
@@ -251,8 +263,7 @@ async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | N
         destinations=list(params["destinations"]),
         dates=dates,
         hubs=list(params["hubs"]),
-        adults=params["adults"],
-        currency=currency,
+        **options.as_columns(),
         trip_days=params.get("trip_days", 0),
         window_start=window.start,
         window_end=window.end,
@@ -378,7 +389,7 @@ async def on_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             searched = [str(d) for d in load_json_list(row.get("dates"))]
             await add_favorite(
                 origin=meta.origin, hub=itin.hub, destination=itin.dest,
-                adults=row.get("adults") or 1, currency=meta.currency,
+                **SearchOptions.from_mapping(row).as_columns(),
                 price=float(itin.total),
                 check_dates=[itin.date] if action == "t" else (searched or [itin.date]),
                 trip_days=row.get("trip_days") or 0,

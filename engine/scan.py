@@ -19,6 +19,7 @@ from providers.base import (
     ProviderFetchError,
     ProviderParseError,
     RatedPrice,
+    SearchOptions,
     SupportsCalendar,
 )
 
@@ -55,20 +56,17 @@ def _build_jobs(
     dests: list[str],
     window: SearchWindow,
     trip_days: int,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
 ) -> list[_CalendarJob]:
     jobs: list[_CalendarJob] = []
     for hub in hubs:
         jobs.append((
-            CalendarQuery(origin=origin, dest=hub, start=window.start, end=window.end,
-                          adults=adults, currency=currency),
+            options.calendar_query(origin, hub, window.start, window.end),
             "out_dom", hub,
         ))
         for dest in dests:
             jobs.append((
-                CalendarQuery(origin=hub, dest=dest, start=window.start, end=window.end,
-                              adults=adults, currency=currency),
+                options.calendar_query(hub, dest, window.start, window.end),
                 "out_onward", (hub, dest),
             ))
 
@@ -77,14 +75,12 @@ def _build_jobs(
         ret_end = add_days(window.end, trip_days)
         for hub in hubs:
             jobs.append((
-                CalendarQuery(origin=hub, dest=origin, start=ret_start, end=ret_end,
-                              adults=adults, currency=currency),
+                options.calendar_query(hub, origin, ret_start, ret_end),
                 "ret_dom", hub,
             ))
             for dest in dests:
                 jobs.append((
-                    CalendarQuery(origin=dest, dest=hub, start=ret_start, end=ret_end,
-                                  adults=adults, currency=currency),
+                    options.calendar_query(dest, hub, ret_start, ret_end),
                     "ret_onward", (hub, dest),
                 ))
 
@@ -99,8 +95,7 @@ async def scan_calendars(
     dests: list[str],
     window: SearchWindow,
     trip_days: int,
-    adults: int,
-    currency: str,
+    options: SearchOptions,
     concurrency: int = 8,
     delay: float = 0.0,
     cancel: CancelToken | None = None,
@@ -122,7 +117,7 @@ async def scan_calendars(
 
     jobs = _build_jobs(
         origin=origin, hubs=hubs, dests=dests, window=window, trip_days=trip_days,
-        adults=adults, currency=currency,
+        options=options,
     )
 
     out_dom: dict[str, dict[str, RatedPrice]] = {}

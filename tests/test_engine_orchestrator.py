@@ -1071,3 +1071,108 @@ async def test_relabelled_ticks_keep_the_best_price(monkeypatch):
 
     assert ticks == [Progress(phase="Phase 1 (cross-check)", done=1, total=2,
                               best_total=Decimal("9"), best_confirmed=True)]
+
+
+# ── SearchOptions reach every query (Layer 3c) ──────────────────────────────
+
+from providers.base import SearchOptions
+
+
+class RecordingCalendarProvider(FakeCalendarProvider):
+    """Keeps every query object, not just its route."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.queries: list = []
+
+    async def price_calendar(self, query):
+        self.queries.append(query)
+        return await super().price_calendar(query)
+
+    async def search_leg(self, query):
+        self.queries.append(query)
+        return await super().search_leg(query)
+
+
+BUSINESS_PAIR = SearchOptions(adults=2, children=1, cabin="BUSINESS", currency="USD",
+                              max_stops=1, min_layover=60)
+
+
+async def test_options_reach_every_calendar_and_leg_query(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = RecordingCalendarProvider(
+        calendar_answers={
+            ("LPA", "MAD"): {"2026-10-01": "29"}, ("MAD", "NRT"): {"2026-10-01": "500"},
+            ("MAD", "LPA"): {"2026-10-08": "29"}, ("NRT", "MAD"): {"2026-10-08": "500"},
+        },
+        leg_answers={
+            ("LPA", "MAD", "2026-10-01"): [_offer("25")],
+            ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+            ("MAD", "LPA", "2026-10-08"): [_offer("25")],
+            ("NRT", "MAD", "2026-10-08"): [_offer("480")],
+        },
+    )
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await run_search(origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+                     window=WINDOW, trip_days=7, provider=provider, options=BUSINESS_PAIR)
+
+    kinds = {type(q).__name__ for q in provider.queries}
+    assert kinds == {"CalendarQuery", "LegQuery"}
+    for q in provider.queries:
+        assert (q.adults, q.children, q.cabin, q.currency) == (2, 1, "BUSINESS", "USD"), q
+
+
+async def test_through_fares_keep_the_party_but_drop_the_limits(monkeypatch):
+    """A split always connects at the hub. A direct-only through-fare would
+    almost never exist, so the baseline is priced for the same party, cabin
+    and currency but without the stop/layover limits."""
+    _neutral_discount(monkeypatch)
+    provider = RecordingCalendarProvider(
+        calendar_answers={("LPA", "MAD"): {"2026-10-01": "29"},
+                          ("MAD", "NRT"): {"2026-10-01": "500"}},
+        leg_answers={("LPA", "MAD", "2026-10-01"): [_offer("25")],
+                     ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+                     ("LPA", "NRT", "2026-10-01"): [_offer_pnr("700")]},
+    )
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await run_search(origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+                     window=WINDOW, trip_days=0, provider=provider, options=BUSINESS_PAIR)
+
+    legs = [q for q in provider.queries if type(q).__name__ == "LegQuery"]
+    through = [q for q in legs if (q.origin, q.dest) == ("LPA", "NRT")]
+    split = [q for q in legs if (q.origin, q.dest) != ("LPA", "NRT")]
+    assert through and all(q.max_stops is None and q.min_layover is None for q in through)
+    assert through[0].cabin == "BUSINESS" and through[0].adults == 2
+    assert split and all(q.max_stops == 1 and q.min_layover == 60 for q in split)
+
+
+async def test_grid_options_reach_every_leg_query(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-10-01"): [_offer("25")],
+        ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+    })
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await run_search(origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+                     window=WINDOW, trip_days=0, provider=provider,
+                     options=SearchOptions(adults=3, currency="GBP"))
+
+    assert provider.seen
+    assert all((q.adults, q.currency) == (3, "GBP") for q in provider.seen)
+
+
+async def test_no_options_is_todays_search(monkeypatch):
+    _neutral_discount(monkeypatch)
+    scenario = _one_hub_scenario()
+    provider = RecordingCalendarProvider(calendar_answers=scenario.calendar_answers,
+                                         leg_answers=scenario.leg_answers)
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    await run_search(origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+                     window=WINDOW, trip_days=0, provider=provider)
+
+    assert all((q.adults, q.children, q.cabin, q.currency) == (1, 0, "ECONOMY", "EUR")
+               for q in provider.queries)

@@ -86,7 +86,8 @@ def test_to_params_matches_what_run_and_report_takes():
     params = _ready().to_params()
 
     assert set(params) == {"origin", "destinations", "dates", "hubs",
-                           "adults", "currency", "trip_days"}
+                           "adults", "currency", "trip_days",
+                           "children", "cabin", "max_stops", "min_layover"}
     assert params["origin"] == "LPA"
     assert params["destinations"] == {"NRT": "Tokyo Narita"}
     assert params["hubs"] == {"MAD": "Madrid"}
@@ -209,3 +210,22 @@ def test_the_draft_and_dates_modules_stay_telegram_free():
         "assert not bad, bad"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+from providers.base import SearchOptions
+
+
+def test_the_draft_carries_its_options_to_the_engine():
+    d = SearchDraft(origin="LPA", origin_name="Gran Canaria", adults=2, children=1,
+                    cabin="BUSINESS", currency="USD", max_stops=1, min_layover=60)
+    assert d.options == SearchOptions(adults=2, children=1, cabin="BUSINESS",
+                                      currency="USD", max_stops=1, min_layover=60)
+    assert SearchOptions.from_mapping(d.to_params()) == d.options
+
+
+def test_the_options_row_replaces_the_read_only_footer():
+    d = SearchDraft(origin="LPA", origin_name="Gran Canaria", adults=2, cabin="BUSINESS",
+                    currency="USD", max_stops=1)
+    text, rows = d.render()
+    assert "2 adults · Business · USD · ≤1 stop" in text
+    assert "edit:opts" in [b.data for row in rows for b in row]

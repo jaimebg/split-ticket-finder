@@ -133,6 +133,10 @@ claim than one only the primary provider could confirm.
 - **Guided search** — a single draft message you edit in place: pick
   destinations, trip shape, dates and hubs in any order, with Back and Edit
   on every field and a query-count estimate before anything is fetched.
+- **Search options** — adults and children, cabin (Economy to First),
+  currency, and search-time limits on stops and layover. The builder only
+  offers what the configured flight source can actually search; anything
+  else is refused with a reason, never reported as "no flights".
 - **Place search** — type a city or airport name and pick from the matches;
   no IATA code needed. Pasting codes still works. Falls back to codes when
   no configured provider can resolve names.
@@ -306,6 +310,14 @@ commercial fare APIs that do exist are priced per-query well beyond a personal
 project. The scraper builds the `tfs` URL parameter by hand-encoding a protobuf
 message — that is what lets a single URL express "one-way, LPA to MAD, this date,
 this many passengers", which is the whole basis of the search.
+
+**Every price is for the whole party.** The two sources disagree: Kiwi
+quotes the total for every passenger, Google quotes per person (verified
+against both live). Mixing them would make a two-adult cross-check compare
+a total with a single fare. So the rule lives at the provider boundary:
+every `Offer.price` is the party's total, and the Google adapter multiplies
+by the number of adults. Nothing downstream — the discount arithmetic, the
+savings line, the scheduler's drop threshold — has to know.
 
 **Bounded concurrency, not unbounded.** The first version issued every request
 strictly one at a time with a fixed delay between them. Firing them all at once

@@ -10,6 +10,7 @@ from config import ORIGIN
 from db import add_favorite, delete_favorite, get_favorites, get_search_by_id
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
 from handlers.utils import esc, format_favorite, load_json_list
+from providers.base import SearchOptions
 from results.store import load
 
 logger = logging.getLogger(__name__)
@@ -105,8 +106,7 @@ async def save_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         origin=row.get("origin") or ORIGIN,
         hub=best.hub,
         destination=best.dest,
-        adults=row.get("adults") or 1,
-        currency=row.get("currency") or "EUR",
+        **SearchOptions.from_mapping(row).as_columns(),
         price=float(best.total),
         check_dates=check_dates,
         trip_days=trip_days,

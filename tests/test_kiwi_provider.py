@@ -703,3 +703,49 @@ async def test_resolve_place_skips_nodes_without_an_iata_code(kiwi_fixture):
 
     places = await _provider(handler).resolve_place("Tokyo")
     assert [p.code for p in places] == ["NRT", "TJH"]
+
+
+def test_kiwi_declares_every_cabin_children_and_layover():
+    from providers.base import ALL_CABINS
+    from providers.kiwi import KiwiProvider
+
+    caps = KiwiProvider().capabilities
+    assert caps.cabins == frozenset(ALL_CABINS)
+    assert caps.children and caps.min_layover
+
+
+async def test_price_calendar_sends_the_search_limits(kiwi_fixture):
+    """Verified live 2026-09-26: the calendar honours maxStopsCount and
+    stopoverTime (MAD->NRT direct-only prices 2 of 6 days, at 1372+ EUR
+    against 401 with any stops)."""
+    seen = {}
+    payload = kiwi_fixture("calendar_lpa_mad")
+
+    def handler(request):
+        import json as _json
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json=payload)
+
+    await _provider(handler).price_calendar(CalendarQuery(
+        origin="MAD", dest="NRT", start="2026-10-01", end="2026-10-31",
+        max_stops=0, min_layover=180))
+
+    flt = seen["body"]["variables"]["filter"]
+    assert flt["maxStopsCount"] == 0
+    assert flt["stopoverTime"]["start"] == 3
+    assert flt["transportTypes"] == ["FLIGHT"]
+
+
+async def test_price_calendar_sends_no_limits_by_default(kiwi_fixture):
+    seen = {}
+    payload = kiwi_fixture("calendar_lpa_mad")
+
+    def handler(request):
+        import json as _json
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json=payload)
+
+    await _provider(handler).price_calendar(
+        CalendarQuery(origin="LPA", dest="MAD", start="2026-10-01", end="2026-10-31"))
+
+    assert seen["body"]["variables"]["filter"] == {"transportTypes": ["FLIGHT"]}

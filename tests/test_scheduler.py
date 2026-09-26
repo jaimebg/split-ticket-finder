@@ -324,3 +324,52 @@ async def test_engine_error_is_logged_and_does_not_abort_other_favorites(temp_db
     assert bot.messages == []
     fav = (await db_module.get_favorites())[0]
     assert fav["last_price"] == pytest.approx(600.0)  # untouched
+
+
+from providers.base import Capabilities, SearchOptions
+
+
+async def test_the_scheduler_replays_every_option_and_the_exact_dates(temp_db, fake_engine):
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=2, currency="USD",
+        price=None, check_dates=["2026-09-01", "2026-09-20"], trip_days=0,
+        children=1, cabin="BUSINESS", max_stops=1, min_layover=60,
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    call = fake_engine["calls"][0]
+    assert call["options"] == SearchOptions(adults=2, children=1, cabin="BUSINESS",
+                                            currency="USD", max_stops=1, min_layover=60)
+    assert call["dates"] == ["2026-09-01", "2026-09-20"]
+
+
+async def test_a_favourite_its_provider_cannot_search_is_skipped(
+    temp_db, fake_engine, monkeypatch,
+):
+    """Review Focus #2: never re-price under a different query shape."""
+    class GoogleLike:
+        name = "google"
+        capabilities = Capabilities(cabins=frozenset({"ECONOMY"}), children=False,
+                                    min_layover=False)
+
+    monkeypatch.setattr(scheduler_module, "get_provider", lambda name: GoogleLike())
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=["2026-09-01"], trip_days=0, provider="google",
+        cabin="BUSINESS",
+    )
+
+    await check_favorites(FakeBot(), owner_chat_id=1)
+
+    assert fake_engine["calls"] == []
+
+
+async def test_a_pre_3c_favourite_replays_as_the_defaults(temp_db, fake_engine):
+    """Review Focus #5: NULL option columns mean today's search."""
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=["2026-09-01"], trip_days=0,
+    )
+    await check_favorites(FakeBot(), owner_chat_id=1)
+    assert fake_engine["calls"][0]["options"] == SearchOptions()
