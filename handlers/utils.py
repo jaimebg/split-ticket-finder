@@ -156,7 +156,7 @@ def load_json_list(value: object) -> list:
     return decoded if isinstance(decoded, list) else []
 
 
-def format_favorite(fav: dict, default_origin: str) -> str:
+def format_favorite(fav: dict, default_origin: str, stats=None) -> str:
     """Render one favourite as an HTML block for the favourites list."""
     record_price = fav.get("record_price")
     last_price = fav.get("last_price")
@@ -173,10 +173,18 @@ def format_favorite(fav: dict, default_origin: str) -> str:
     if len(dates) > 3:
         dates_str += f" (+{len(dates) - 3})"
 
+    # Imported here: results.history imports this module at load time.
+    from results.history import options_line, versus_average
+
     origin = fav.get("origin") or default_origin
-    return (
+    lines = [
         f"<b>{esc(origin)} -> {esc(fav['hub'])} -> {esc(fav['destination'])}</b>"
-        f" <i>({trip_str})</i>\n"
-        f"  Record: {record_str} | Last: {last_str}\n"
-        f"  Checked: {checked_str} | Dates: {esc(dates_str)}"
-    )
+        f" <i>({trip_str})</i>",
+        f"  {esc(options_line(fav))}",
+        f"  Record: {record_str} | Last: {last_str}",
+    ]
+    trend = versus_average(stats)
+    if trend:
+        lines.append(f"  {trend}")
+    lines.append(f"  Checked: {checked_str} | Dates: {esc(dates_str)}")
+    return "\n".join(lines)

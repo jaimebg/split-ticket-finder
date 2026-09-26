@@ -162,8 +162,11 @@ claim than one only the primary provider could confirm.
   stress-free connection. Same request count; the night is called out, not
   priced.
 - **Price tracking** — track any result, its exact dates or its route across
-  the whole window, and a background scheduler re-prices it every few hours,
-  alerting you when it drops more than 10% below its recorded best.
+  the whole window. A scheduler re-prices it every few hours and keeps the
+  history: each favourite shows a sparkline, its lowest, highest and 30-day
+  average, and how today compares. Alerts fire on a drop below the record or
+  on a new low well under the recent average, and say which — with a button
+  to the full history.
 - **Search history** — review any past search or re-run it with identical
   parameters.
 - **Bounded-concurrency scraper** — requests run in parallel under a

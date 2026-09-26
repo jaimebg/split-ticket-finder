@@ -199,3 +199,6 @@ def test_env_example_parses_and_documents_the_risk_thresholds():
     values = dotenv_values(path)
     assert values["RISK_HIGH_BELOW_HOURS"] == "2"
     assert values["RISK_MEDIUM_BELOW_HOURS"] == "4"
+    assert (values["PRICE_HISTORY_DAYS"], values["SPARK_POINTS"],
+            values["ALERT_MIN_CHECKS"]) == ("30", "20", "5")
+    assert not [ln for ln in lines if ln.startswith("`")], "plan text pasted into the template"
