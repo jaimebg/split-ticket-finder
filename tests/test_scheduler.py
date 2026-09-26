@@ -385,3 +385,62 @@ async def test_an_overnight_favourite_is_not_rechecked_for_today(temp_db, fake_e
     )
     await check_favorites(FakeBot(), owner_chat_id=1)
     assert fake_engine["calls"][0]["dates"] == [str(tomorrow)]
+
+
+class MarkupBot(FakeBot):
+    def __init__(self):
+        super().__init__()
+        self.markups = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        await super().send_message(chat_id, text, **kwargs)
+        self.markups.append(kwargs.get("reply_markup"))
+
+
+async def test_the_first_check_sets_a_missing_record_without_alerting(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(discount="0", dom_price="50", onward_price="300")]
+    await db_module.add_favorite(origin="LPA", hub="MAD", destination="NRT", adults=1,
+                                 currency="EUR", price=None, check_dates=["2026-09-01"])
+    bot = FakeBot()
+    await check_favorites(bot, owner_chat_id=1)
+    assert bot.messages == []
+    assert (await db_module.get_favorites())[0]["record_price"] == pytest.approx(350.0)
+
+
+async def _favourite_with_history(prices, record=700.0):
+    fav = await db_module.add_favorite(origin="LPA", hub="MAD", destination="NRT", adults=1,
+                                       currency="EUR", price=record, check_dates=["2026-09-01"])
+    for p in prices:
+        await db_module.add_price_check(fav, p, None)
+    return fav
+
+
+async def test_a_new_low_against_the_trend_alerts_and_keeps_the_record(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(discount="0", dom_price="100", onward_price="600")]
+    fav = await _favourite_with_history((800, 790, 810, 800, 805))
+    bot = MarkupBot()
+
+    await check_favorites(bot, owner_chat_id=1)
+
+    assert len(bot.messages) == 1
+    assert "lowest" in bot.messages[0] and "below the average (801)" in bot.messages[0]
+    assert bot.markups[0].inline_keyboard[0][0].callback_data == f"fh:{fav}"
+    assert (await db_module.get_favorites())[0]["record_price"] == pytest.approx(700.0)
+
+
+async def test_no_trend_alert_without_enough_history(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(discount="0", dom_price="100", onward_price="600")]
+    await _favourite_with_history((800, 790, 810, 800))
+    bot = FakeBot()
+    await check_favorites(bot, owner_chat_id=1)
+    assert bot.messages == []
+
+
+async def test_both_triggers_send_one_alert_naming_both(temp_db, fake_engine):
+    """Review Focus #3."""
+    fake_engine["state"]["itineraries"] = [_itin(discount="0", dom_price="100", onward_price="500")]
+    await _favourite_with_history((800, 790, 810, 800, 805), record=700.0)
+    bot = FakeBot()
+    await check_favorites(bot, owner_chat_id=1)
+    assert len(bot.messages) == 1
+    assert "was 700" in bot.messages[0] and "below the average" in bot.messages[0]

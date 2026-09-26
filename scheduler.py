@@ -6,12 +6,15 @@ import json
 import logging
 from datetime import date
 
-from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD
-from db import add_price_check, get_favorites, update_favorite_price
+from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD, SPARK_POINTS
+from db import add_price_check, get_favorites, get_price_checks, update_favorite_price
 from engine import run_search
+from handlers.anchor import markup
+from handlers.search.draft import Button
 from models import SearchWindow, bookable_onward_dates
 from providers.base import SearchOptions, capabilities_of
 from providers.registry import get_provider, primary_provider
+from results.history import alert_text, sparkline, trend_signal
 
 logger = logging.getLogger(__name__)
 
@@ -145,37 +148,38 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
             "onward_price": float(best.onward_price),
         }
 
-        # Save price check record
+        prior = await get_price_checks(fav_id)
         await add_price_check(fav_id, best_price, best_detail)
 
-        # Compare against record price
-        if (
-            record_price is not None
-            and best_price < record_price * (1 - PRICE_DROP_THRESHOLD)
-        ):
-            # Price drop detected — send alert and update record
-            alert_msg = (
-                f"Price drop alert! "
-                f"{origin}->{hub}->{destination}: "
-                f"{best_price:.2f} {currency} "
-                f"(was {record_price:.2f})"
+        if record_price is None:
+            # A favourite saved without a price: its first check is its record.
+            await update_favorite_price(fav_id, best_price, is_record=True)
+            logger.info("Favorite %d: first check sets the record at %.2f %s",
+                        fav_id, best_price, currency)
+            continue
+
+        record_drop = best_price < record_price * (1 - PRICE_DROP_THRESHOLD)
+        trend = trend_signal(prior, best_price, today=date.today())
+        if record_drop or trend is not None:
+            prices = [p for _, p in prior if p is not None] + [best_price]
+            text = alert_text(
+                fav, origin=origin, last=best_price, date=best.date,
+                record_before=record_price, record_drop=record_drop, trend=trend,
+                spark=sparkline(prices[-SPARK_POINTS:]),
             )
             try:
-                await bot.send_message(chat_id=owner_chat_id, text=alert_msg)
+                await bot.send_message(
+                    chat_id=owner_chat_id, text=text, parse_mode="HTML",
+                    reply_markup=markup([[Button("📈 History", f"fh:{fav_id}")]]),
+                )
             except Exception:
-                logger.exception("Failed to send price drop alert for favorite %d", fav_id)
-            await update_favorite_price(fav_id, best_price, is_record=True)
-            logger.info(
-                "Favorite %d: price drop! %.2f -> %.2f %s",
-                fav_id, record_price, best_price, currency,
-            )
-        else:
-            # No significant drop — just update last price
-            await update_favorite_price(fav_id, best_price, is_record=False)
-            logger.info(
-                "Favorite %d: checked, best=%.2f %s (record=%s)",
-                fav_id, best_price, currency, record_price,
-            )
+                logger.exception("Failed to send price alert for favorite %d", fav_id)
+            logger.info("Favorite %d: alert (record_drop=%s, trend=%s) at %.2f %s",
+                        fav_id, record_drop, trend is not None, best_price, currency)
+
+        # Only a record drop moves the record: it means "the best price we
+        # alerted on", and a trend alert is about the recent average instead.
+        await update_favorite_price(fav_id, best_price, is_record=record_drop)
 
 
 async def scheduler_loop(bot, owner_chat_id: int) -> None:

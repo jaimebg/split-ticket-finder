@@ -2,15 +2,25 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from config import ORIGIN
-from db import add_favorite, delete_favorite, get_favorites, get_search_by_id
+from db import (
+    add_favorite,
+    delete_favorite,
+    get_favorite,
+    get_favorites,
+    get_price_checks,
+    get_search_by_id,
+)
+from handlers.anchor import markup
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
 from handlers.utils import esc, format_favorite, load_json_list
 from providers.base import SearchOptions
+from results.history import history_screen, price_stats
 from results.store import load
 
 logger = logging.getLogger(__name__)
@@ -36,13 +46,13 @@ async def _render_favorites(query, heading: str) -> None:
     buttons: list[list[InlineKeyboardButton]] = []
 
     for fav in favs:
-        lines.append(format_favorite(fav, ORIGIN))
-        buttons.append([
-            InlineKeyboardButton(
-                f"Delete {fav['hub']}->{fav['destination']}",
-                callback_data=f"delfav_{fav['id']}",
-            )
-        ])
+        stats = price_stats(await get_price_checks(fav["id"]), today=date.today())
+        lines.append(format_favorite(fav, ORIGIN, stats))
+    buttons.append([
+        InlineKeyboardButton("📈 History", callback_data=f"fh:{fav['id']}"),
+        InlineKeyboardButton(f"Delete {fav['hub']}->{fav['destination']}",
+                             callback_data=f"delfav_{fav['id']}"),
+    ])
 
     buttons.append([InlineKeyboardButton("Back", callback_data="menu_main")])
 
@@ -149,10 +159,26 @@ async def delete_fav(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 # ── Handler list builder ────────────────────────────────────────────────────
 
+@owner_only_callback
+async def favorite_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """One favourite's price history: sparkline, statistics, delete."""
+    query = update.callback_query
+    await query.answer()
+    fav = await get_favorite(int(query.data.split(":")[1]))
+    if fav is None:
+        await query.edit_message_text("That route is no longer tracked.",
+                                      reply_markup=MAIN_MENU_KEYBOARD)
+        return
+    stats = price_stats(await get_price_checks(fav["id"]), today=date.today())
+    text, rows = history_screen(fav, stats, origin=ORIGIN)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup(rows))
+
+
 def get_favorites_handlers() -> list[CallbackQueryHandler]:
     """Return the list of CallbackQueryHandlers for favorites features."""
     return [
         CallbackQueryHandler(favorites_menu, pattern=r"^menu_favorites$"),
         CallbackQueryHandler(save_favorite, pattern=r"^savefav_\d+$"),
         CallbackQueryHandler(delete_fav, pattern=r"^delfav_\d+$"),
+        CallbackQueryHandler(favorite_history, pattern=r"^fh:\d+$"),
     ]

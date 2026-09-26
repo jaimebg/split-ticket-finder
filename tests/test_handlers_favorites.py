@@ -129,3 +129,52 @@ def test_the_favourite_line_shows_currency_options_and_average():
     assert "2 adults · Business · USD" in text
     assert "6% below its 30-day average" in text
     assert "6% below" not in format_favorite(fav, "LPA")      # no stats, no line
+
+
+class _Query:
+    def __init__(self, data):
+        self.data = data
+        self.edits: list[tuple[str, dict]] = []
+
+    async def answer(self, *a, **k):
+        pass
+
+    async def edit_message_text(self, text, **kwargs):
+        self.edits.append((text, kwargs))
+
+
+def _upd(data):
+    return SimpleNamespace(callback_query=_Query(data), effective_user=SimpleNamespace(id=_OWNER_ID))
+
+
+async def test_the_list_offers_history_per_favourite(temp_db, monkeypatch):
+    from handlers.favorites import favorites_menu
+
+    monkeypatch.setattr(start_module, "OWNER_ID", _OWNER_ID)
+    fav = await db_module.add_favorite(origin="LPA", hub="MAD", destination="NRT", adults=1,
+                                       currency="EUR", price=700.0, check_dates=["2026-10-01"])
+    update = _upd("menu_favorites")
+    await favorites_menu(update, None)
+    text, kw = update.callback_query.edits[-1]
+    data = [b.callback_data for row in kw["reply_markup"].inline_keyboard for b in row]
+    assert f"fh:{fav}" in data and f"delfav_{fav}" in data
+    assert "1 adult · Economy · EUR" in text
+
+
+async def test_the_history_screen_and_a_deleted_favourite(temp_db, monkeypatch):
+    """Review Focus #4 (the deleted half)."""
+    from handlers.favorites import favorite_history
+
+    monkeypatch.setattr(start_module, "OWNER_ID", _OWNER_ID)
+    fav = await db_module.add_favorite(origin="LPA", hub="MAD", destination="NRT", adults=1,
+                                       currency="EUR", price=700.0, check_dates=["2026-10-01"])
+    for price in (800.0, 700.0):
+        await db_module.add_price_check(fav, price, None)
+
+    update = _upd(f"fh:{fav}")
+    await favorite_history(update, None)
+    assert "Last 700 EUR (−100 since the previous check)" in update.callback_query.edits[-1][0]
+
+    gone = _upd(f"fh:{fav + 50}")
+    await favorite_history(gone, None)
+    assert gone.callback_query.edits[-1][0] == "That route is no longer tracked."
