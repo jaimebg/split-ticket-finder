@@ -389,7 +389,7 @@ async def on_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             searched = [str(d) for d in load_json_list(row.get("dates"))]
             await add_favorite(
                 origin=meta.origin, hub=itin.hub, destination=itin.dest,
-                adults=row.get("adults") or 1, currency=meta.currency,
+                **SearchOptions.from_mapping(row).as_columns(),
                 price=float(itin.total),
                 check_dates=[itin.date] if action == "t" else (searched or [itin.date]),
                 trip_days=row.get("trip_days") or 0,

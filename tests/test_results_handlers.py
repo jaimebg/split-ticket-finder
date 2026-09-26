@@ -309,3 +309,12 @@ async def test_history_rerun_replays_every_option(temp_db):
     coro.close()
     assert SearchOptions.from_mapping(params) == SearchOptions(
         adults=2, children=1, cabin="BUSINESS", currency="USD", max_stops=1, min_layover=60)
+
+
+async def test_tracking_stores_the_search_s_options(temp_db):
+    sid = await _saved(serialize([standard_one_way()]), adults=2, children=1,
+                       cabin="BUSINESS", currency="USD", max_stops=1, min_layover=60)
+    await _tap(f"r:{sid}:t:0")
+    fav = (await db_module.get_favorites())[0]
+    assert (fav["adults"], fav["children"], fav["cabin"], fav["currency"],
+            fav["max_stops"], fav["min_layover"]) == (2, 1, "BUSINESS", "USD", 1, 60)

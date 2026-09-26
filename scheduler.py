@@ -9,7 +9,7 @@ from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD
 from db import add_price_check, get_favorites, update_favorite_price
 from engine import run_search
 from models import SearchWindow
-from providers.base import SearchOptions
+from providers.base import SearchOptions, capabilities_of
 from providers.registry import get_provider, primary_provider
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,8 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
         origin = fav["origin"]
         hub = fav["hub"]
         destination = fav["destination"]
-        adults = fav["adults"]
-        currency = fav["currency"]
+        options = SearchOptions.from_mapping(fav)
+        currency = options.currency
         record_price = fav["record_price"]
 
         # A favourite saved from a round-trip search has a record price
@@ -82,6 +82,14 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
         provider_name = fav.get("provider")
         provider = get_provider(provider_name) if provider_name else primary_provider()
 
+        # The options a price was quoted under must be replayed exactly. A
+        # provider that can't express them would price a different query and
+        # report the difference as a movement, so skip instead.
+        refusal = capabilities_of(provider).rejects(options)
+        if refusal is not None:
+            logger.warning("Favorite %d skipped: %s", fav_id, refusal)
+            continue
+
         try:
             result = await run_search(
                 origin=origin,
@@ -89,7 +97,11 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
                 hubs={hub: hub},
                 window=window,
                 trip_days=trip_days,
-                options=SearchOptions(adults=adults, currency=currency),
+                options=options,
+                # The exact tracked dates: on a grid (calendar-less) provider
+                # the engine would otherwise resample the window and could
+                # drop the last date.
+                dates=all_dates,
                 provider=provider,
             )
         except Exception:

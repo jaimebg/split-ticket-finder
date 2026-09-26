@@ -101,3 +101,13 @@ async def test_save_favorite_tracks_the_cheapest_stored_result(temp_db, monkeypa
     fav = (await db_module.get_favorites())[0]
     assert fav["hub"] == "BCN"            # 500.00 beats 525.00
     assert fav["record_price"] == 500.0
+
+
+async def test_save_favorite_stores_the_search_s_options(temp_db, monkeypatch):
+    monkeypatch.setattr(start_module, "OWNER_ID", _OWNER_ID)
+    search_id = await _save_search_with({"adults": 2, "children": 1, "cabin": "BUSINESS",
+                                         "max_stops": 0})
+    await save_favorite(_update(f"savefav_{search_id}"), None)
+    fav = (await db_module.get_favorites())[0]
+    assert (fav["adults"], fav["children"], fav["cabin"], fav["max_stops"]) == \
+        (2, 1, "BUSINESS", 0)
