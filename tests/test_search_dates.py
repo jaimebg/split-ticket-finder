@@ -402,3 +402,12 @@ def test_a_month_entirely_beyond_the_horizon_renders_no_tappable_days():
 def test_shift_month_wraps_the_year():
     assert shift_month(2026, 12, 1) == (2027, 1)
     assert shift_month(2026, 1, -1) == (2025, 12)
+
+
+def test_the_caption_says_which_day_the_dates_mean_overnight():
+    from handlers.search.dates import caption
+    from handlers.search.draft import SearchDraft
+
+    text = caption(SearchDraft(origin="LPA", origin_name="GC", overnight=True))
+    assert "international flight" in text
+    assert "international flight" not in caption(SearchDraft(origin="LPA", origin_name="GC"))

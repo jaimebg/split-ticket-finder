@@ -46,6 +46,8 @@ def render(draft: SearchDraft, caps: Capabilities) -> tuple[str, Rows]:
         rows.append([Button(_mark("Any layover", draft.min_layover is None), "o:l:any")]
                     + [Button(_mark(f"≥{m // 60}h layover", draft.min_layover == m),
                               f"o:l:{m}") for m in LAYOVER_CHOICES])
+    rows.append([Button(_mark("🌙 Night at the hub", draft.overnight),
+                        "o:o:0" if draft.overnight else "o:o:1")])
     rows.append([Button("⬅️ Back", "back")])
     return text, rows
 
@@ -91,6 +93,8 @@ def apply(draft: SearchDraft, data: str, caps: Capabilities) -> SearchDraft | st
         return _passengers(draft, key, value, caps)
     if key == "c" and value in CABIN_LABELS:
         new = draft.with_(cabin=value)
+    elif key == "o" and value in ("0", "1"):
+        new = draft.with_(overnight=value == "1")
     elif key == "cur" and value in CURRENCIES:
         new = draft.with_(currency=value)
     elif key == "s":
