@@ -11,10 +11,11 @@ import logging
 import re
 import sys
 from datetime import date
+from typing import Annotated, Literal
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
 from engine import run_search
@@ -46,6 +47,10 @@ _IATA = re.compile(r"^[A-Z]{3}$")
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
 MAX_PASSENGERS = 9
 MAX_DESTINATIONS = 10
+MAX_HUBS = 12
+
+Cabin = Literal["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST_CLASS"]
+IsoDate = Annotated[str, Field(description="A day as YYYY-MM-DD.")]
 
 
 def _code(value: str, what: str) -> str:
@@ -100,42 +105,74 @@ class SearchOutput(BaseModel):
 
 @mcp.tool()
 async def search_split_tickets(
-    destinations: list[str],
-    window_start: str,
-    window_end: str,
-    origin: str | None = None,
-    hubs: list[str] | None = None,
-    trip_days: int = 0,
-    adults: int = 1,
-    children: int = 0,
-    cabin: str = "ECONOMY",
-    currency: str = "EUR",
-    max_stops: int | None = None,
-    min_layover_minutes: int | None = None,
-    overnight: bool = False,
-    hide_risky: bool = False,
-    limit: int = 10,
+    destinations: Annotated[list[str], Field(
+        description="1-10 destination IATA airport codes, e.g. [\"NRT\"]. Use find_airports "
+                    "to turn names into codes.")],
+    window_start: Annotated[str, Field(
+        description="First day (YYYY-MM-DD) the international (onward) flight may leave.")],
+    window_end: Annotated[str, Field(
+        description="Last day (YYYY-MM-DD) the onward flight may leave; at most 91 days "
+                    "after window_start.")],
+    origin: Annotated[str | None, Field(
+        description="Home airport. The domestic residency discount is only priced from the "
+                    "configured eligible islands (e.g. LPA, TFN, PMI); defaults to the "
+                    "configured home airport.")] = None,
+    hubs: Annotated[list[str] | None, Field(
+        description="Up to 12 hub airports to route through; default: the configured "
+                    "Spanish/Portuguese hubs (8). Fewer hubs = fewer requests.")] = None,
+    trip_days: Annotated[int, Field(
+        description="0 = one-way; otherwise the return leaves this many days later "
+                    "(round trips cost about twice the requests).")] = 0,
+    adults: Annotated[int, Field(description="Adults (at least 1).")] = 1,
+    children: Annotated[int, Field(description="Children; adults + children <= 9.")] = 0,
+    cabin: Annotated[Cabin, Field(description="Cabin class.")] = "ECONOMY",
+    currency: Annotated[str, Field(description="3-letter currency code, e.g. EUR.")] = "EUR",
+    max_stops: Annotated[int | None, Field(
+        description="Most stops per ticket (0-3); null = any.")] = None,
+    min_layover_minutes: Annotated[int | None, Field(
+        description="Shortest connection allowed inside one ticket, in minutes.")] = None,
+    overnight: Annotated[bool, Field(
+        description="Spend a night at the hub: the domestic flight leaves the day before "
+                    "(and returns the day after), for a stress-free connection.")] = False,
+    hide_risky: Annotated[bool, Field(
+        description="Drop itineraries whose connection between the two tickets is high risk, "
+                    "impossible or unknown. Estimates and partial results are dropped too, "
+                    "since their connection can't be judged.")] = False,
+    limit: Annotated[int, Field(description="How many itineraries to return (1-30).")] = 10,
 ) -> SearchOutput:
-    """Search split-ticket itineraries: a discounted domestic flight to a hub plus a
-    separately booked onward flight, compared with the airline's single ticket.
+    """Search split-ticket itineraries: a residency-discounted domestic flight to a
+    hub plus a separately booked onward flight, compared with the airline's single
+    ticket.
 
-    COST: one call sends roughly 90-190 requests to the flight sources and can
-    take up to a minute. Call it deliberately, not in a loop; use
-    price_calendar to explore dates first.
+    COST: roughly hubs x (1 + destinations) calendar requests (doubled for a round
+    trip) plus up to ~60-120 flight requests: about 90-330 requests and up to a
+    minute or two with the defaults. Call it deliberately, not in a loop; narrow
+    hubs/destinations and use price_calendar to explore dates first.
 
-    Dates are the international (onward) flight's days. trip_days=0 is
-    one-way; otherwise the return is that many days later. overnight=True
-    flies the domestic leg the day before (and the day after on the return).
-    Prices are totals for the whole party. A ticket with price null has no
-    bookable offer yet. failed_requests > 0 means the result may be
-    incomplete, not that no flights exist.
+    Dates are the international (onward) flight's days. Prices are totals for the
+    whole party. Only status "confirmed" itineraries are fully bookable: for
+    "partial" or "estimate" the total is partly or wholly a calendar guess, and a
+    ticket with price null has no bookable offer yet. failed_requests > 0 means the
+    result may be incomplete, not that no flights exist. Savings are negative when
+    the airline's single ticket is cheaper.
     """
     if not 1 <= len(destinations) <= MAX_DESTINATIONS:
         raise ToolError(f"Give between 1 and {MAX_DESTINATIONS} destinations.")
     dests = [_code(d, "Destination") for d in destinations]
     org = _code(origin or config.ORIGIN, "Origin")
-    hub_names = ({c: config.DEFAULT_HUBS.get(c, c) for c in (_code(h, "Hub") for h in hubs)}
-                 if hubs else dict(config.DEFAULT_HUBS))
+    if org not in config.ELIGIBLE_ORIGINS:
+        # The engine discounts the domestic leg to any configured hub, which is
+        # only true from the eligible islands. From anywhere else it would
+        # invent a saving no traveller could get.
+        raise ToolError(f"The domestic discount is only priced from "
+                        f"{', '.join(sorted(config.ELIGIBLE_ORIGINS))}; {org} is not one of them.")
+    if hubs and len(hubs) > MAX_HUBS:
+        raise ToolError(f"Give at most {MAX_HUBS} hubs; each one adds requests.")
+    requested = [_code(h, "Hub") for h in hubs] if hubs else list(config.DEFAULT_HUBS)
+    hub_names = {c: config.DEFAULT_HUBS.get(c, c) for c in requested
+                 if c != org and c not in dests}
+    if not hub_names:
+        raise ToolError("No hubs left once the origin and destinations are removed.")
     start, end = _day(window_start, "window_start"), _day(window_end, "window_end")
     if end < start:
         raise ToolError("The window ends before it starts.")
@@ -146,6 +183,9 @@ async def search_split_tickets(
     options = _options(adults=adults, children=children, cabin=cabin, currency=currency,
                        max_stops=max_stops, min_layover=min_layover_minutes,
                        overnight=overnight)
+    if not isinstance(primary_provider(), SupportsCalendar):
+        raise ToolError("Your flight source has no price calendar, so a full search would "
+                        "take tens of minutes; configure Kiwi as the primary source.")
 
     today = date.today().isoformat()
     window_days = [d for d in SearchWindow(start.isoformat(), end.isoformat()).dates()

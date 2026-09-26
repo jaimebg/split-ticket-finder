@@ -6,9 +6,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-import split_ticket_mcp.server as server
 from mcp import Client
 
+import split_ticket_mcp.server as server
 from providers.base import ALL_CABINS, Capabilities, Place, ProviderError, RatedPrice
 from tests.results_fixtures import offer, one_way, onward_out, seg, standard_one_way
 
@@ -72,7 +72,7 @@ async def test_a_search_returns_structured_itineraries(engine):
     engine["itineraries"] = [standard_one_way(date=D1, through_fare=Decimal("700")),
                              standard_one_way(date=D2)]
     result = await _call("search_split_tickets", {"destinations": ["nrt"], "window_start": D1,
-                                                  "window_end": D2, "cabin": "business",
+                                                  "window_end": D2, "cabin": "BUSINESS",
                                                   "adults": 2, "limit": 1})
     assert not result.is_error
     out = result.structured_content
@@ -118,7 +118,7 @@ async def test_failed_requests_are_reported(engine):
     ({"window_start": D2, "window_end": D1}, "ends before it starts"),
     ({"adults": 0}, "at least one adult"),
     ({"adults": 8, "children": 2}, "at most 9 passengers"),
-    ({"cabin": "COACH"}, "is not a cabin"),
+    ({"cabin": "COACH"}, "cabin"),                 # the schema enum rejects it before the tool runs
     ({"limit": 99}, "limit must be between 1 and 30"),
 ])
 async def test_bad_input_is_a_sentence_not_a_search(engine, args, sentence):
@@ -198,3 +198,90 @@ async def test_find_airports_and_its_errors(monkeypatch):
     assert "at least 2 characters" in _error(await _call("find_airports", {"query": "T"}))
     monkeypatch.setattr(server, "places_provider", lambda: None)
     assert "pass IATA codes instead" in _error(await _call("find_airports", {"query": "Tokio"}))
+
+
+# ── Final review fixes ──────────────────────────────────────────────────────
+
+async def test_an_origin_without_the_discount_is_refused(engine):
+    """The discount is a residency discount on flights from the configured
+    islands: pricing it from Madrid would invent a saving."""
+    text = _error(await _call("search_split_tickets", {"origin": "MAD", "destinations": ["NRT"],
+                                                       "window_start": D1, "window_end": D1}))
+    assert "only priced from" in text and "LPA" in text
+    assert engine["calls"] == []
+
+
+async def test_hubs_that_are_the_origin_or_a_destination_are_dropped(engine):
+    await _call("search_split_tickets", {"origin": "LPA", "destinations": ["NRT", "BCN"],
+                                         "hubs": ["MAD", "BCN", "LPA"], "window_start": D1,
+                                         "window_end": D1})
+    assert set(engine["calls"][0]["hubs"]) == {"MAD"}
+    text = _error(await _call("search_split_tickets", {"destinations": ["BCN"], "hubs": ["BCN"],
+                                                       "window_start": D1, "window_end": D1}))
+    assert "No hubs left" in text
+
+
+async def test_too_many_hubs_is_refused(engine):
+    many = ["MAD", "BCN", "AGP", "SVQ", "VLC", "BIO", "LIS", "OPO", "ALC", "SCQ", "OVD", "ZAZ", "XRY"]
+    text = _error(await _call("search_split_tickets", {"destinations": ["NRT"], "hubs": many,
+                                                       "window_start": D1, "window_end": D1}))
+    assert "at most 12 hubs" in text
+
+
+async def test_a_full_search_needs_a_price_calendar(engine, monkeypatch):
+    """Without a calendar the grid fallback costs thousands of scrapes and
+    tens of minutes: far past any MCP client's timeout."""
+    class NoCalendar:
+        name = "google"
+
+        async def search_leg(self, query):
+            return []
+
+    monkeypatch.setattr(server, "primary_provider", lambda: NoCalendar())
+    text = _error(await _call("search_split_tickets", {"destinations": ["NRT"],
+                                                       "window_start": D1, "window_end": D1}))
+    assert "tens of minutes" in text
+    assert engine["calls"] == []
+
+
+async def test_the_schemas_describe_their_parameters():
+    async with Client(server.mcp) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+    props = tools["search_split_tickets"].input_schema["properties"]
+    assert "YYYY-MM-DD" in props["window_start"]["description"]
+    assert "residency discount" in props["origin"]["description"]
+    assert set(props["cabin"]["enum"]) == set(ALL_CABINS)
+    assert "requests" in tools["search_split_tickets"].description
+
+
+async def test_the_servers_own_window_limit(engine, monkeypatch):
+    monkeypatch.setattr(server.config, "MAX_WINDOW_DAYS", 2)
+    far = str(date.today() + timedelta(days=13))
+    text = _error(await _call("search_split_tickets", {"destinations": ["NRT"],
+                                                       "window_start": D1, "window_end": far}))
+    assert "the most one search can cover is 2" in text
+
+
+@pytest.mark.parametrize(("args", "sentence"), [
+    ({"trip_days": 181}, "trip_days must be between"),
+    ({"currency": "EURO"}, "is not a 3-letter currency code"),
+    ({"max_stops": 4}, "max_stops must be between"),
+    ({"min_layover_minutes": 2000}, "min_layover_minutes must be between"),
+])
+async def test_more_bad_input(engine, args, sentence):
+    base = {"destinations": ["NRT"], "window_start": D1, "window_end": D1}
+    assert sentence in _error(await _call("search_split_tickets", {**base, **args}))
+
+
+async def test_calendar_and_airport_failures_are_sentences(monkeypatch):
+    monkeypatch.setattr(server, "primary_provider",
+                        lambda: FakeCalendarProvider(error=ProviderError("boom")))
+    assert "The price calendar failed" in _error(await _call(
+        "price_calendar", {"origin": "LPA", "dest": "MAD", "start": D1, "end": D2}))
+
+    class Broken(FakeCalendarProvider):
+        async def resolve_place(self, term, limit=8):
+            raise ProviderError("down")
+
+    monkeypatch.setattr(server, "places_provider", lambda: Broken())
+    assert "The airport lookup failed" in _error(await _call("find_airports", {"query": "Tokio"}))

@@ -37,3 +37,5 @@ def test_the_readme_documents_the_setup():
     assert 'pip install -e ".[mcp]"' in text
     assert "claude mcp add split-tickets" in text
     assert '"mcpServers"' in text
+    # config.py finds .env next to itself, not in cwd: don't tell users otherwise.
+    assert '"cwd"' not in text and "lets it read your `.env`" not in text

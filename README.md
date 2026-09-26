@@ -395,14 +395,14 @@ Claude Desktop (`claude_desktop_config.json`):
   "mcpServers": {
     "split-tickets": {
       "command": "/path/to/split-ticket-finder/.venv/bin/split-ticket-mcp",
-      "cwd": "/path/to/split-ticket-finder",
       "env": { "ORIGIN": "LPA", "PROVIDERS": "kiwi,google" }
     }
   }
 }
 ```
 
-`cwd` lets it read your `.env`; `env` overrides individual settings. Three tools:
+It reads the checkout's own `.env` (next to `config.py`) wherever it is launched from;
+`env` overrides individual settings. Three tools:
 
 | Tool | What it does | Cost |
 |---|---|---|
