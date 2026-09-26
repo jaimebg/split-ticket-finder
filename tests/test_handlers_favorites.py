@@ -111,3 +111,21 @@ async def test_save_favorite_stores_the_search_s_options(temp_db, monkeypatch):
     fav = (await db_module.get_favorites())[0]
     assert (fav["adults"], fav["children"], fav["cabin"], fav["max_stops"]) == \
         (2, 1, "BUSINESS", 0)
+
+
+def test_the_favourite_line_shows_currency_options_and_average():
+    from datetime import date
+
+    from handlers.utils import format_favorite
+    from results.history import price_stats
+
+    fav = {"id": 1, "origin": "LPA", "hub": "MAD", "destination": "NRT", "trip_days": 0,
+           "adults": 2, "cabin": "BUSINESS", "currency": "USD", "record_price": 700.0,
+           "last_price": 704.0, "last_checked": "2026-10-30T08:00:00Z",
+           "check_dates": '["2026-11-01"]'}
+    stats = price_stats([("2026-10-20T08:00:00Z", 800.0), ("2026-10-30T08:00:00Z", 704.0)],
+                        today=date(2026, 10, 31))
+    text = format_favorite(fav, "LPA", stats)
+    assert "2 adults · Business · USD" in text
+    assert "6% below its 30-day average" in text
+    assert "6% below" not in format_favorite(fav, "LPA")      # no stats, no line
