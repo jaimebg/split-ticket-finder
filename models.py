@@ -81,6 +81,9 @@ class Progress:
     done: int
     total: int
     best_total: Decimal | None = None
+    # False while best_total is only a calendar estimate (phase 0b's cheapest
+    # candidate); True once it is the cheapest confirmed itinerary.
+    best_confirmed: bool = False
 
     @property
     def fraction(self) -> float:

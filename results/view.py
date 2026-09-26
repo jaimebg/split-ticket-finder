@@ -355,7 +355,7 @@ def progress_text(progress: Progress | None, strategy: str, currency: str) -> st
         return "Starting search…"
     lines = [f"{esc(phase_label(progress.phase, strategy))}… {progress.done}/{progress.total}"]
     if progress.best_total is not None:
-        confirmed = getattr(progress, "best_confirmed", False)  # Task 6 makes this a field
+        confirmed = progress.best_confirmed
         lines.append(f"Best so far: {_money(progress.best_total, currency)}"
                      f"{'' if confirmed else ' (est.)'}")
     return "\n".join(lines)

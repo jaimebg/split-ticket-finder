@@ -55,6 +55,7 @@ the default itself.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
@@ -196,9 +197,38 @@ class _PhaseRelabeler:
             return
         shown = self._relabel.get(progress.phase, progress.phase)
         if shown != progress.phase:
-            progress = Progress(phase=shown, done=progress.done, total=progress.total,
-                                 best_total=progress.best_total)
+            progress = dataclasses.replace(progress, phase=shown)
         self._on_progress(progress)
+
+
+class _BestStamp:
+    """Stamps the running best total onto every tick a caller sees.
+
+    Sits innermost, directly around the caller's ``on_progress``: every
+    relabeller wraps it, so whatever phase name a tick ends up with, it
+    reaches the caller carrying the current best. The strategies call
+    ``set`` at the two points a best becomes known: after phase 0b ranks
+    the calendars (an estimate) and once confirmed itineraries exist.
+    """
+
+    def __init__(self, on_progress: ProgressCallback):
+        self._on_progress = on_progress
+        self._best: Decimal | None = None
+        self._confirmed = False
+
+    def set(self, total: Decimal, *, confirmed: bool) -> None:
+        self._best = total
+        self._confirmed = confirmed
+
+    def set_confirmed_from(self, itineraries: list[Itinerary]) -> None:
+        totals = [it.total for it in itineraries if it.confirmed]
+        if totals:
+            self.set(min(totals), confirmed=True)
+
+    def __call__(self, progress: Progress) -> None:
+        self._on_progress(dataclasses.replace(
+            progress, best_total=self._best, best_confirmed=self._confirmed,
+        ))
 
 
 def _attach_through_fares(
@@ -360,6 +390,7 @@ async def _run_two_stage(
     on_progress: ProgressCallback | None,
     concurrency: int | None = None,
     delay: float | None = None,
+    best: _BestStamp | None = None,
 ) -> tuple[list[Itinerary], CalendarGrid, int, int]:
     """Phase 0 -> 0b -> 1 -> 2, cancellable between each."""
     resolved_concurrency, resolved_delay = _budget(provider, concurrency=concurrency, delay=delay)
@@ -379,6 +410,8 @@ async def _run_two_stage(
     shortlist = diversify(
         candidates, limit=SHORTLIST_SIZE, max_per_hub=MAX_PER_HUB, max_per_date=MAX_PER_DATE,
     )
+    if best is not None and shortlist:
+        best.set(min(c.total for c in shortlist), confirmed=False)
 
     _check_cancel(cancel)
     fetcher = LegFetcher(provider, concurrency=resolved_concurrency, delay=resolved_delay,
@@ -389,6 +422,8 @@ async def _run_two_stage(
         discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
         adults=adults, currency=currency,
     )
+    if best is not None:
+        best.set_confirmed_from(itineraries)
 
     _check_cancel(cancel)
     fares = await through_fares(
@@ -417,6 +452,7 @@ async def _run_grid(
     dates: list[str] | None = None,
     concurrency: int | None = None,
     delay: float | None = None,
+    best: _BestStamp | None = None,
 ) -> tuple[list[Itinerary], None, int, int]:
     """The four-phase grid fallback, plus the through-fare baseline.
 
@@ -445,6 +481,8 @@ async def _run_grid(
         adults=adults, currency=currency, max_dates=FALLBACK_MAX_DATES,
         explicit_dates=dates,
     )
+    if best is not None:
+        best.set_confirmed_from(itineraries)
 
     _check_cancel(cancel)
     relabel.retitle({PHASE_THROUGH_FARE: GRID_THROUGH_FARE_PHASE})
@@ -543,6 +581,9 @@ async def run_search(
             f"supports (MAX_WINDOW_DAYS)"
         )
 
+    best = _BestStamp(on_progress) if on_progress is not None else None
+    on_progress = best if best is not None else on_progress
+
     secondary = _pick_secondary(provider)
 
     if isinstance(provider, SupportsCalendar):
@@ -551,6 +592,7 @@ async def run_search(
             provider, origin=origin, destinations=destinations, hubs=hubs,
             window=window, trip_days=trip_days, adults=adults, currency=currency,
             cancel=cancel, on_progress=on_progress, concurrency=concurrency, delay=delay,
+            best=best,
         )
     else:
         strategy = STRATEGY_GRID
@@ -558,7 +600,7 @@ async def run_search(
             provider, origin=origin, destinations=destinations, hubs=hubs,
             window=window, trip_days=trip_days, adults=adults, currency=currency,
             cancel=cancel, on_progress=on_progress, dates=dates,
-            concurrency=concurrency, delay=delay,
+            concurrency=concurrency, delay=delay, best=best,
         )
 
     tagged, xc_parse_errors, xc_fetch_errors = await _cross_check(
