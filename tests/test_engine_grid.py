@@ -428,3 +428,23 @@ async def test_the_grid_pairs_flights_that_can_connect():
     )
 
     assert itin.dom_out is in_time
+
+
+async def test_the_grid_flies_the_domestic_legs_a_day_early_and_late():
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-09-30"): [_offer("40")],
+        ("MAD", "NRT", "2026-10-01"): [_offer("300")],
+        ("NRT", "MAD", "2026-10-08"): [_offer("280")],
+        ("MAD", "LPA", "2026-10-09"): [_offer("35")],
+    })
+
+    [itin] = await run_grid_search(
+        _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
+        window=SearchWindow("2026-10-01", "2026-10-01"), trip_days=7,
+        hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
+        options=SearchOptions(overnight=True),
+    )
+
+    assert (itin.date, itin.return_date, itin.overnight) == ("2026-10-01", "2026-10-08", True)
+    assert ("LPA", "MAD", "2026-09-30") in _seen(provider)
+    assert ("MAD", "LPA", "2026-10-09") in _seen(provider)

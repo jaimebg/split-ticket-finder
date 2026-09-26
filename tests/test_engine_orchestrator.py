@@ -1176,3 +1176,23 @@ async def test_no_options_is_todays_search(monkeypatch):
 
     assert all((q.adults, q.children, q.cabin, q.currency) == (1, 0, "ECONOMY", "EUR")
                for q in provider.queries)
+
+
+async def test_overnight_end_to_end_two_stage(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = FakeCalendarProvider(
+        calendar_answers={("LPA", "MAD"): {"2026-09-30": "29"},
+                          ("MAD", "NRT"): {"2026-10-01": "500"}},
+        leg_answers={("LPA", "MAD", "2026-09-30"): [_offer("25")],
+                     ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+                     ("LPA", "NRT", "2026-10-01"): [_offer_pnr("700")]},
+    )
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+
+    result = await run_search(origin="LPA", destinations={"NRT": "Tokyo"},
+                              hubs={"MAD": "Madrid"}, window=WINDOW, trip_days=0,
+                              provider=provider, options=SearchOptions(overnight=True))
+
+    [itin] = result.itineraries
+    assert (itin.dom_date, itin.date, itin.overnight) == ("2026-09-30", "2026-10-01", True)
+    assert itin.through_fare == Decimal("700")      # priced on the onward date

@@ -404,6 +404,7 @@ async def _run_two_stage(
     candidates = rank_candidates(
         grid, window=window, trip_days=trip_days,
         discount_airports=DISCOUNT_AIRPORTS, discount=_discount(),
+        overnight=options.overnight,
     )
     shortlist = diversify(
         candidates, limit=SHORTLIST_SIZE, max_per_hub=MAX_PER_HUB, max_per_date=MAX_PER_DATE,

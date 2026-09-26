@@ -90,7 +90,7 @@ async def confirm(
     itineraries: list[Itinerary] = []
 
     for cand in candidates:
-        dom_out_offers = offers_by_leg.get((origin, cand.hub, cand.date))
+        dom_out_offers = offers_by_leg.get((origin, cand.hub, cand.dom_date))
         onward_out_offers = offers_by_leg.get((cand.hub, cand.dest, cand.date))
         if not dom_out_offers or not onward_out_offers:
             continue
@@ -98,7 +98,7 @@ async def confirm(
         dom_ret_offers: list[Offer] | None = None
         onward_ret_offers: list[Offer] | None = None
         if round_trip:
-            dom_ret_offers = offers_by_leg.get((cand.hub, origin, cand.return_date))
+            dom_ret_offers = offers_by_leg.get((cand.hub, origin, cand.dom_return_date))
             onward_ret_offers = offers_by_leg.get((cand.dest, cand.hub, cand.return_date))
             if not dom_ret_offers or not onward_ret_offers:
                 continue
@@ -122,6 +122,7 @@ async def confirm(
             dom_ret=dom_ret,
             onward_out=onward_out,
             onward_ret=onward_ret,
+            overnight=cand.overnight,
         ))
 
     itineraries.sort(key=lambda itin: itin.total)

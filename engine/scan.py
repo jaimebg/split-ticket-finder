@@ -59,9 +59,13 @@ def _build_jobs(
     options: SearchOptions,
 ) -> list[_CalendarJob]:
     jobs: list[_CalendarJob] = []
+    # A night at the hub: the domestic legs fly a day before (out) and a day
+    # after (back) the onward flights, so only their windows move.
+    dom_shift = -1 if options.overnight else 0
     for hub in hubs:
         jobs.append((
-            options.calendar_query(origin, hub, window.start, window.end),
+            options.calendar_query(origin, hub, add_days(window.start, dom_shift),
+                                   add_days(window.end, dom_shift)),
             "out_dom", hub,
         ))
         for dest in dests:
@@ -75,7 +79,8 @@ def _build_jobs(
         ret_end = add_days(window.end, trip_days)
         for hub in hubs:
             jobs.append((
-                options.calendar_query(hub, origin, ret_start, ret_end),
+                options.calendar_query(hub, origin, add_days(ret_start, -dom_shift),
+                                       add_days(ret_end, -dom_shift)),
                 "ret_dom", hub,
             ))
             for dest in dests:
@@ -208,6 +213,7 @@ def rank_candidates(
     trip_days: int,
     discount_airports: set[str],
     discount: Decimal,
+    overnight: bool = False,
 ) -> list[Candidate]:
     """Rank every (hub, destination, date) combination phase 0 already priced.
 
@@ -233,6 +239,9 @@ def rank_candidates(
     cheap, so no candidate is emitted for that date rather than one priced
     as if the missing leg were free.
 
+    With ``overnight``, a candidate's domestic legs are read a day before
+    (out) and a day after (back) its onward dates.
+
     Returns candidates sorted cheapest (``.total``) first.
     """
     round_trip = trip_days > 0
@@ -250,14 +259,15 @@ def rank_candidates(
         ret_onward_prices = grid.ret_onward.get((hub, dest), {})
 
         for date in dates:
-            out_dom = out_dom_prices.get(date)
+            out_dom = out_dom_prices.get(add_days(date, -1) if overnight else date)
             out_onward = out_onward_prices.get(date)
             if out_dom is None or out_onward is None:
                 continue
 
             if round_trip:
                 return_date = add_days(date, trip_days)
-                ret_dom = ret_dom_prices.get(return_date)
+                ret_dom = ret_dom_prices.get(
+                    add_days(return_date, 1) if overnight else return_date)
                 ret_onward = ret_onward_prices.get(return_date)
                 if ret_dom is None or ret_onward is None:
                     continue
@@ -276,6 +286,7 @@ def rank_candidates(
                 dom_price=dom_price,
                 onward_price=onward_price,
                 discount=rate,
+                overnight=overnight,
             ))
 
     candidates.sort(key=lambda c: c.total)

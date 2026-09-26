@@ -522,3 +522,28 @@ async def test_confirm_pairs_flights_that_can_connect():
     )
 
     assert itin.dom_out is in_time
+
+
+async def test_confirm_queries_the_domestic_legs_on_their_shifted_days():
+    """Review Focus #3: out a day early, back a day late."""
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-09-30"): [_offer("40")],
+        ("MAD", "NRT", "2026-10-01"): [_offer("300")],
+        ("NRT", "MAD", "2026-10-15"): [_offer("280")],
+        ("MAD", "LPA", "2026-10-16"): [_offer("35")],
+    })
+    cand = dataclasses.replace(_cand("2026-10-01", "MAD", "NRT", return_date="2026-10-15"),
+                               overnight=True)
+
+    [itin] = await confirm(
+        _fetcher(provider), [cand], origin="LPA", trip_days=14, hub_names={},
+        dest_names={}, discount_airports=set(), discount=Decimal(0),
+        options=SearchOptions(overnight=True),
+    )
+
+    assert itin.overnight
+    assert itin.total == Decimal("655.00")
+    assert {(q.origin, q.dest, q.date) for q in provider.seen} == {
+        ("LPA", "MAD", "2026-09-30"), ("MAD", "NRT", "2026-10-01"),
+        ("NRT", "MAD", "2026-10-15"), ("MAD", "LPA", "2026-10-16"),
+    }

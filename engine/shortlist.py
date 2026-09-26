@@ -108,7 +108,7 @@ def legs_for(
     legs: dict[LegKey, None] = {}
 
     for cand in candidates:
-        legs[(origin, cand.hub, cand.date)] = None
+        legs[(origin, cand.hub, cand.dom_date)] = None
         legs[(cand.hub, cand.dest, cand.date)] = None
         if trip_days > 0:
             if not cand.return_date:
@@ -116,7 +116,7 @@ def legs_for(
                     f"candidate {cand.date} {cand.hub}->{cand.dest} has trip_days="
                     f"{trip_days} but no return_date"
                 )
-            legs[(cand.hub, origin, cand.return_date)] = None
+            legs[(cand.hub, origin, cand.dom_return_date)] = None
             legs[(cand.dest, cand.hub, cand.return_date)] = None
 
     return list(legs)

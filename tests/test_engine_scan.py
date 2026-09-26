@@ -263,3 +263,24 @@ def test_round_trip_drops_a_date_whose_return_leg_is_missing():
 def test_empty_grid_ranks_to_nothing():
     assert rank_candidates(_grid(), window=WINDOW, trip_days=0,
                            discount_airports={"MAD"}, discount=Decimal("0.75")) == []
+
+
+async def test_overnight_shifts_only_the_domestic_calendar_windows():
+    provider = FakeCalendarProvider()
+    await scan_calendars(provider, origin="LPA", hubs=["MAD"], dests=["NRT"],
+                         window=WINDOW, trip_days=14,
+                         options=SearchOptions(overnight=True))
+    assert ("LPA", "MAD", "2026-09-30", "2026-10-02") in provider.calls    # a day early
+    assert ("MAD", "NRT", "2026-10-01", "2026-10-03") in provider.calls    # unchanged
+    assert ("MAD", "LPA", "2026-10-16", "2026-10-18") in provider.calls    # a day late
+    assert ("NRT", "MAD", "2026-10-15", "2026-10-17") in provider.calls    # unchanged
+
+
+def test_overnight_ranking_pairs_the_domestic_day_before():
+    grid = _grid(out_dom={"MAD": {"2026-09-30": "29"}},
+                 out_onward={("MAD", "NRT"): {"2026-10-01": "575"}})
+    assert rank_candidates(grid, window=WINDOW, trip_days=0,
+                           discount_airports=set(), discount=Decimal(0)) == []
+    [c] = rank_candidates(grid, window=WINDOW, trip_days=0, discount_airports=set(),
+                          discount=Decimal(0), overnight=True)
+    assert (c.date, c.dom_date, c.overnight) == ("2026-10-01", "2026-09-30", True)
