@@ -35,7 +35,7 @@ def ground_time(landed: Segment, leaving: Segment) -> timedelta | None:
     return leaving.dep_local - landed.arr_local
 
 
-def _self_transfer(arriving: Offer | None, departing: Offer | None) -> timedelta | None:
+def self_transfer(arriving: Offer | None, departing: Offer | None) -> timedelta | None:
     """The gap between two separately booked tickets, or None if unknown."""
     if arriving is None or departing is None:
         return None
@@ -283,12 +283,12 @@ class Itinerary:
     @property
     def buffer_out(self) -> timedelta | None:
         """Time at the hub between the domestic and onward outbound tickets."""
-        return _self_transfer(self.dom_out, self.onward_out)
+        return self_transfer(self.dom_out, self.onward_out)
 
     @property
     def buffer_ret(self) -> timedelta | None:
         """Time at the hub between the onward and domestic return tickets."""
-        return _self_transfer(self.onward_ret, self.dom_ret)
+        return self_transfer(self.onward_ret, self.dom_ret)
 
     @property
     def savings(self) -> Decimal | None:
