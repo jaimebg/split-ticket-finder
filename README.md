@@ -1,8 +1,10 @@
 # Split Ticket Finder
 
-A Telegram bot that finds flights cheaper than the airline's own through-fare, by
-splitting one journey into two separately-booked tickets and routing it through a
-hub where a partial discount applies.
+A split-ticket flight search engine that finds fares cheaper than the airline's own
+through-fare, by splitting one journey into two separately booked tickets and
+routing it through a hub where a partial discount applies. It runs as a Telegram
+bot that also tracks prices, and as a local [MCP](#use-it-from-an-ai-assistant-mcp)
+server for AI assistants.
 
 [![CI](https://github.com/jaimebg/split-ticket-finder/actions/workflows/ci.yml/badge.svg)](https://github.com/jaimebg/split-ticket-finder/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
@@ -62,7 +64,7 @@ flowchart TD
     F --> G[Ranked itineraries<br/>+ savings + booking links]
     G --> H[(SQLite)]
     H -->|"every 6h, same provider"| I[Re-price tracked<br/>routes]
-    I -->|"drop > 10%"| J[Telegram alert]
+    I -->|"below the record, or a<br/>new low under the average"| J[Telegram alert]
 ```
 
 **Phase 0 — scan.** One calendar request per leg — the domestic hop to each
@@ -83,6 +85,13 @@ one phase that spends real request budget, and it spends it per *leg*, not
 per candidate: a round-trip itinerary needs up to four real offers (domestic
 and onward, each way) against a one-way itinerary's two, which is most of why
 a round-trip search costs roughly double a one-way one overall.
+
+Each leg comes back with several offers, and the two tickets are paired by
+**connection risk first, price second**: the cheapest domestic flight is no
+use if it lands after the onward one leaves. Among the offers already fetched
+— zero extra requests — each direction takes the cheapest pair in the safest
+risk level available, so a slightly dearer connection you can make beats a
+cheaper one you can't.
 
 **Phase 2 — baseline.** The airline's own single-ticket through-fare is priced
 for the cheapest `THROUGH_FARE_DATES` (default 3) distinct dates among the
@@ -169,6 +178,9 @@ claim than one only the primary provider could confirm.
   to the full history.
 - **Search history** — review any past search or re-run it with identical
   parameters.
+- **AI assistant tools** — the same engine as a local MCP server, so Claude or
+  any MCP client can look up airports, explore a price calendar and run a
+  full search ([below](#use-it-from-an-ai-assistant-mcp)).
 - **Bounded-concurrency scraper** — requests run in parallel under a
   configurable cap, with retries and exponential backoff.
 
@@ -218,6 +230,9 @@ Ticket 3 · NRT → MAD · 450.00 EUR
 Ticket 4 · MAD → LPA · 22.50 EUR (90.00 EUR before 75% discount)
   ...
 
+Connection risk: Medium — 3h00m between tickets at MAD; 3h00m between tickets at MAD
+Separate tickets: collect and re-check your bags, and the second airline won't wait if the first is late.
+
 Save 182.50 EUR (15%) vs the single ticket at 1,180.00 EUR
 
 Book each ticket separately — only a separate domestic ticket gets the discount.
@@ -228,7 +243,9 @@ Book each ticket separately — only a separate domestic ticket gets the discoun
 
 `partial` marks a result where some tickets are real offers and some are
 still calendar prices; `est.` marks one priced from calendars alone. Neither
-has a booking link for the tickets that aren't real offers yet.
+has a booking link for the tickets that aren't real offers yet. A risky
+connection shows in the summary row too — `⚠️ 1h40`, `⛔ impossible` or
+`❔ times unknown` — and `🌙` marks a night at the hub.
 
 The through-fare and savings lines come from actually pricing the airline's
 single-ticket fare (phase 2), not from an assumption that splitting always
@@ -288,6 +305,8 @@ engine/
   scan.py               phase 0: price a whole date window from calendars
   shortlist.py          phase 0b: rank + diversify -- arithmetic only, no requests
   drill.py              phase 1/2: confirm a shortlist against real offers; price the through-fare
+  risk.py               connection risk between the two tickets: low / medium / unknown / high / impossible
+  pairing.py            pick the flight pair: safest risk level first, cheapest within it
   grid.py               sampled-date fallback for a provider with no calendar (Google)
   fetch.py              bounded-concurrency leg fetcher shared by every phase
   orchestrator.py       run_search: strategy selection, phase sequencing, cross-check
@@ -295,6 +314,10 @@ results/
   store.py              the searches.results column: full-fidelity v2, and readers for older rows
   filters.py            zero-request filters; unknown never passes
   view.py               summary, detail, filters and progress screens -- text + buttons, no Telegram calls
+  history.py            price history: stats, sparkline, trend alert, favourite and alert text
+split_ticket_mcp/
+  server.py             local stdio MCP server: find_airports, price_calendar, search_split_tickets
+  mapping.py            itineraries as models an assistant can read
 search.py               phase 0 calendar grid serialization
 scheduler.py            background price-tracking loop
 db.py                   async SQLite layer with in-place migrations
@@ -402,13 +425,15 @@ Claude Desktop (`claude_desktop_config.json`):
 ```
 
 It reads the checkout's own `.env` (next to `config.py`) wherever it is launched from;
-`env` overrides individual settings. Three tools:
+`env` overrides individual settings. The discount is only priced from the eligible
+islands (`ORIGIN` must be one of them), and a full search needs a source with a
+price calendar (Kiwi). Three tools:
 
 | Tool | What it does | Cost |
 |---|---|---|
 | `find_airports` | "Tokio" → NRT, HND | 1 request |
 | `price_calendar` | cheapest price per day for one route | 1 request |
-| `search_split_tickets` | the full search, with legs, links, connection risk and savings | ~90–190 requests |
+| `search_split_tickets` | the full search, with legs, links, connection risk and savings | ~90–330 requests |
 
 Try: *"Find me the cheapest way from Gran Canaria to Tokyo in late October
 for two adults, and avoid tight connections."*
@@ -534,14 +559,13 @@ that.
 
 ## Limitations
 
-- **Self-transfer risk, still real at the ticket boundary.** Two separate
-  tickets means no interline protection if the first is delayed and you miss
-  the second — no data source changes that, and it is still on you to leave a
-  real buffer between legs. What *is* now modelled is a related but distinct
-  risk: whether a connection *inside* one of the two tickets forces you to
-  reclaim and re-check your bags before the next segment. When a provider
-  reports that (Kiwi does), the bot warns about it per itinerary; it says
-  nothing when the provider can't tell, rather than implying "no".
+- **Self-transfer risk is rated, not removed.** Two separate tickets means no
+  interline protection: if the first is late and you miss the second, the
+  second airline owes you nothing. The bot rates every connection, pairs
+  flights safest-first, can hide risky results and can plan a night at the
+  hub — but a "low" rating is a margin, not a guarantee. It also warns when a
+  connection *inside* one ticket forces a bag re-check (Kiwi reports this),
+  and says nothing when a provider can't tell, rather than implying "no".
 - **Baggage allowance and cost are captured, but not yet netted into the
   price.** Included cabin/checked-bag allowances and the extra checked-bag fee
   now come through per offer, from providers that expose them. What is still
