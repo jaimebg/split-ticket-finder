@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
+from engine.risk import Risk, itinerary_risk
 from models import Itinerary
 from providers.base import Offer
 
@@ -38,17 +39,20 @@ class Filters:
     max_hours: int | None = None
     min_buffer_hours: int | None = None
     exclude: frozenset[str] = frozenset()
+    hide_risky: bool = False
 
     @property
     def active(self) -> int:
         set_values = (self.max_stops, self.max_hours, self.min_buffer_hours)
-        return sum(v is not None for v in set_values) + (1 if self.exclude else 0)
+        return (sum(v is not None for v in set_values) + (1 if self.exclude else 0)
+                + (1 if self.hide_risky else 0))
 
     def to_dict(self) -> dict:
         return {
             "max_stops": self.max_stops, "max_hours": self.max_hours,
             "min_buffer_hours": self.min_buffer_hours,
             "exclude": sorted(self.exclude),
+            "hide_risky": self.hide_risky,
         }
 
     @classmethod
@@ -62,12 +66,17 @@ class Filters:
             max_hours=_choice(d.get("max_hours"), HOURS_CHOICES),
             min_buffer_hours=_choice(d.get("min_buffer_hours"), BUFFER_CHOICES),
             exclude=frozenset(c for c in exclude if isinstance(c, str)),
+            hide_risky=d.get("hide_risky") is True,
         )
 
     def with_setting(self, key: str, value: str) -> Filters:
         """Apply one filter button. ValueError for anything no button sends."""
         if key == "x":
             return replace(self, exclude=self.exclude ^ {value})
+        if key == "r":
+            if value not in ("1", "any"):
+                raise ValueError(f"{value!r} is not an option for 'r'")
+            return replace(self, hide_risky=value == "1")
         if key not in _SETTINGS:
             raise ValueError(f"unknown filter key {key!r}")
         field_name, allowed = _SETTINGS[key]
@@ -133,6 +142,10 @@ def _passes(itin: Itinerary, f: Filters) -> bool:
         for o in offers:
             if not o.segments or any(s.carrier in f.exclude for s in o.segments):
                 return False
+    if f.hide_risky:
+        judged = itinerary_risk(itin)
+        if judged is None or judged[0] >= Risk.UNKNOWN:
+            return False
     return True
 
 

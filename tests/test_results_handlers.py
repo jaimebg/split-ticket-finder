@@ -186,7 +186,7 @@ async def test_setting_a_filter_persists_and_resets_to_page_one(temp_db):
     row = await db_module.get_search_by_id(sid)
     assert json.loads(row["view_json"]) == {
         "filters": {"max_stops": 0, "max_hours": None, "min_buffer_hours": None,
-                    "exclude": []},
+                    "exclude": [], "hide_risky": False},
         "page": 1,
     }
     assert "1 of 1 routes shown" in _last(bot)[0]

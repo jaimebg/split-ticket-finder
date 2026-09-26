@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from config import ORIGIN
 from engine.orchestrator import CROSS_CHECK_PHASE, GRID_THROUGH_FARE_PHASE, STRATEGY_GRID
+from engine.risk import RISK_LABELS, Risk, connection_risk, itinerary_risk
 from handlers.search.draft import Button, Rows
 from handlers.utils import esc, load_json_list
 from models import (
@@ -128,6 +129,26 @@ def savings_text(itin: Itinerary, currency: str, fallback: Decimal | None) -> st
             f"at {_money(fare, currency, 2)}")
 
 
+def _risk_marker(itin: Itinerary) -> str:
+    """A short summary-row marker; LOW and MEDIUM stay quiet to keep rows short."""
+    judged = itinerary_risk(itin)
+    if judged is None:
+        return ""
+    risk, _ = judged
+    if risk is Risk.IMPOSSIBLE:
+        return " · ⛔ impossible"
+    if risk is Risk.UNKNOWN:
+        return " · ❔ times unknown"
+    if risk is Risk.HIGH:
+        connections = [(itin.dom_out, itin.onward_out, itin.buffer_out)]
+        if itin.return_date:
+            connections.append((itin.onward_ret, itin.dom_ret, itin.buffer_ret))
+        for arriving, departing, gap in connections:
+            if connection_risk(arriving, departing) is Risk.HIGH:
+                return f" · ⚠️ {_gap(gap)}" if gap is not None else " · ⚠️ airport change"
+    return ""
+
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 def summary(meta: SearchMeta, stored: StoredResults, filters: Filters,
@@ -165,6 +186,7 @@ def summary(meta: SearchMeta, stored: StoredResults, filters: Filters,
         parts.append("\n".join(
             f"{start + n}. <b>{_money(it.total, meta.currency)}</b>  {_dates(it)}  "
             f"via {esc(it.hub)}{_MARKERS.get(it.status, '')}"
+            f"{_risk_marker(it)}{' · 🌙' if it.overnight else ''}"
             for n, (_, it) in enumerate(chunk, 1)
         ))
     else:
@@ -289,6 +311,18 @@ def detail(meta: SearchMeta, stored: StoredResults, index: int,
             block += _ticket(first_no + 1, second, itin.discount, cur,
                              domestic=not first_is_domestic)
             parts.append("\n".join(block))
+        judged = itinerary_risk(itin)
+        if judged is not None:
+            risk, reasons = judged
+            parts.append(
+                f"<b>Connection risk: {RISK_LABELS[risk]}</b> — {esc('; '.join(reasons))}\n"
+                "<i>Separate tickets: collect and re-check your bags, and the second "
+                "airline won't wait if the first is late.</i>")
+        if itin.overnight:
+            night = f"🌙 1 night in {esc(itin.hub_name)} before your flight"
+            if itin.return_date:
+                night += ", and 1 on the way back"
+            parts.append(night + " — not included in the price.")
 
     if itin.requires_bag_recheck is True:
         parts.append("⚠️ You must collect and re-check bags between tickets.")
@@ -319,6 +353,9 @@ def filters_screen(meta: SearchMeta, stored: StoredResults,
             "<i>A route the filters can't check (an estimate, or missing flight "
             "times) is hidden while any filter is on.</i>")
 
+    def _mark_opt(label: str, on: bool) -> str:
+        return f"• {label}" if on else label
+
     def opt(key: str, value: int | None, current: int | None, label: str) -> Button:
         mark = "• " if current == value else ""
         return Button(f"{mark}{label}", f"r:{sid}:f:{key}:{'any' if value is None else value}")
@@ -334,6 +371,9 @@ def filters_screen(meta: SearchMeta, stored: StoredResults,
         [opt("b", None, filters.min_buffer_hours, "Any")]
         + [opt("b", b, filters.min_buffer_hours, f"{b}h") for b in BUFFER_CHOICES],
     ]
+    rows.append([Button("Connection risk", noop)])
+    rows.append([Button(_mark_opt("Any risk", not filters.hide_risky), f"r:{sid}:f:r:any"),
+                 Button(_mark_opt("Hide risky", filters.hide_risky), f"r:{sid}:f:r:1")])
     codes = carriers(stored.itineraries)[:MAX_CARRIER_BUTTONS]
     if codes:
         rows.append([Button("Airlines — tap to exclude", noop)])
