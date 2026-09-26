@@ -703,3 +703,12 @@ async def test_resolve_place_skips_nodes_without_an_iata_code(kiwi_fixture):
 
     places = await _provider(handler).resolve_place("Tokyo")
     assert [p.code for p in places] == ["NRT", "TJH"]
+
+
+def test_kiwi_declares_every_cabin_children_and_layover():
+    from providers.base import ALL_CABINS
+    from providers.kiwi import KiwiProvider
+
+    caps = KiwiProvider().capabilities
+    assert caps.cabins == frozenset(ALL_CABINS)
+    assert caps.children and caps.min_layover

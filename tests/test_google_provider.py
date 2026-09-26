@@ -181,3 +181,28 @@ async def test_search_leg_raises_for_min_layover():
         await GoogleProvider().search_leg(
             LegQuery(origin="LPA", dest="MAD", date="2026-10-06", min_layover=90)
         )
+
+
+async def test_prices_are_totals_for_the_whole_party(real_html, monkeypatch):
+    """Google quotes per person (verified live 2026-09-26: 30 EUR for 1 and
+    for 2 adults). Every Offer.price must be the party's total, as Kiwi's
+    already is, or a two-adult cross-check compares totals with per-person
+    prices."""
+    import providers.google as google
+
+    async def fake_fetch(*args, **kwargs):
+        return real_html
+
+    monkeypatch.setattr(google, "fetch_html", fake_fetch)
+    one = await GoogleProvider().search_leg(LegQuery(origin="LPA", dest="MAD",
+                                                     date="2026-10-06", adults=1))
+    two = await GoogleProvider().search_leg(LegQuery(origin="LPA", dest="MAD",
+                                                     date="2026-10-06", adults=2))
+    assert [o.price * 2 for o in one] == [o.price for o in two]
+    assert [o.checked_bag_price for o in one] == [o.checked_bag_price for o in two]
+
+
+def test_google_declares_what_it_cannot_do():
+    caps = GoogleProvider().capabilities
+    assert caps.cabins == frozenset({"ECONOMY"})
+    assert caps.children is False and caps.min_layover is False

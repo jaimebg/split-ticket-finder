@@ -29,7 +29,9 @@ from config import (
     REQUEST_TIMEOUT,
 )
 from providers.base import (
+    ALL_CABINS,
     CalendarQuery,
+    Capabilities,
     LegQuery,
     Offer,
     Place,
@@ -161,6 +163,8 @@ class KiwiProvider:
     """
 
     name = "kiwi"
+    capabilities = Capabilities(cabins=frozenset(ALL_CABINS), children=True,
+                                min_layover=True)
 
     def __init__(self, client: httpx.AsyncClient | None = None, partner: str | None = None):
         self._client = client

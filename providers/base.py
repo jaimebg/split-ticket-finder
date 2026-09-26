@@ -8,6 +8,7 @@ chooses a search strategy from the answer.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -147,6 +148,120 @@ class Place:
     city: str
     country: str
     place_id: str                       # provider-native id
+
+
+# ── Search options (Layer 3c) ────────────────────────────────────────────────
+
+ALL_CABINS = ("ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST_CLASS")
+CABIN_LABELS = {
+    "ECONOMY": "Economy",
+    "PREMIUM_ECONOMY": "Premium economy",
+    "BUSINESS": "Business",
+    "FIRST_CLASS": "First",
+}
+
+
+@dataclass(frozen=True)
+class SearchOptions:
+    """What the user chose beyond route and dates, carried end to end.
+
+    Every LegQuery and CalendarQuery the engine builds comes from here, so a
+    choice can't reach one leg and miss another. The defaults are the search
+    every caller ran before Layer 3c.
+
+    ``min_layover`` is a connection *inside* one ticket (the provider's
+    stopover), not the self-transfer gap between the two tickets.
+    """
+
+    adults: int = 1
+    children: int = 0
+    cabin: str = "ECONOMY"
+    currency: str = "EUR"
+    max_stops: int | None = None
+    min_layover: int | None = None      # minutes
+
+    @property
+    def passengers(self) -> int:
+        return self.adults + self.children
+
+    @property
+    def is_default_party(self) -> bool:
+        return (self.adults, self.children, self.cabin) == (1, 0, "ECONOMY")
+
+    def leg_query(self, origin: str, dest: str, date: str) -> LegQuery:
+        return LegQuery(
+            origin=origin, dest=dest, date=date, adults=self.adults,
+            children=self.children, cabin=self.cabin, currency=self.currency,
+            max_stops=self.max_stops, min_layover=self.min_layover,
+        )
+
+    def calendar_query(self, origin: str, dest: str, start: str, end: str) -> CalendarQuery:
+        return CalendarQuery(
+            origin=origin, dest=dest, start=start, end=end, adults=self.adults,
+            children=self.children, cabin=self.cabin, currency=self.currency,
+        )
+
+    def without_limits(self) -> SearchOptions:
+        """Same party, cabin and currency; no stop or layover limits."""
+        return dataclasses.replace(self, max_stops=None, min_layover=None)
+
+    def as_columns(self) -> dict:
+        """The six fields under the column names ``searches`` and ``favorites`` use."""
+        return {
+            "adults": self.adults, "children": self.children, "cabin": self.cabin,
+            "currency": self.currency, "max_stops": self.max_stops,
+            "min_layover": self.min_layover,
+        }
+
+    @classmethod
+    def from_mapping(cls, m) -> SearchOptions:
+        """From a params dict or a database row. Missing or NULL is the default,
+        so a row written before Layer 3c replays as the search it was."""
+        def get(key, default):
+            value = m.get(key)
+            return default if value is None else value
+
+        return cls(
+            adults=get("adults", 1), children=get("children", 0),
+            cabin=get("cabin", "ECONOMY"), currency=get("currency", "EUR"),
+            max_stops=m.get("max_stops"), min_layover=m.get("min_layover"),
+        )
+
+    def party_label(self) -> str:
+        people = f"{self.adults} adult{'s' if self.adults != 1 else ''}"
+        if self.children:
+            people += f", {self.children} child{'ren' if self.children != 1 else ''}"
+        return f"{people} · {CABIN_LABELS.get(self.cabin, self.cabin)}"
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    """Which SearchOptions a provider can actually search."""
+
+    cabins: frozenset[str]
+    children: bool
+    min_layover: bool
+
+    def rejects(self, options: SearchOptions) -> str | None:
+        """A sentence saying why this provider can't run *options*, or None."""
+        if options.cabin not in self.cabins:
+            label = CABIN_LABELS.get(options.cabin, options.cabin)
+            return f"Your flight source can't search {label} class."
+        if options.children and not self.children:
+            return "Your flight source can't search with children."
+        if options.min_layover is not None and not self.min_layover:
+            return "Your flight source can't apply a minimum layover."
+        return None
+
+
+_UNRESTRICTED = Capabilities(cabins=frozenset(ALL_CABINS), children=True, min_layover=True)
+
+
+def capabilities_of(provider: object) -> Capabilities:
+    """The provider's declared capabilities. A provider that declares none is
+    assumed capable; if it isn't, it raises ProviderError itself, which the
+    caller also handles."""
+    return getattr(provider, "capabilities", _UNRESTRICTED)
 
 
 # ── Protocols ────────────────────────────────────────────────────────────────
