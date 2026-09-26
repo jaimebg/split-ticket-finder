@@ -241,7 +241,7 @@ async def test_a_partial_result_still_shows_results_with_the_note_appended_below
 ):
     """A partial result (some itineraries survived alongside some errors) is
     genuinely different from a total failure: there are real results to
-    show, so format_results still runs and the caveat is appended below
+    show, so the summary still renders and the caveat is appended below
     them, where "the results above" is an accurate description -- this
     behaviour must stay exactly as it was."""
     fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]

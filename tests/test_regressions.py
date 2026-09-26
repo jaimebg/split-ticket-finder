@@ -6,6 +6,7 @@ behaviour rather than just exercising it.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -14,8 +15,13 @@ import pytest
 import db as db_module
 from handlers.utils import ValidationError, esc, parse_date, parse_date_list, split_message
 from models import Itinerary, generate_dates
-from results.store import _itinerary_from_dict, load, serialize
-from search import format_results
+from results.filters import Filters
+from results.store import StoredResults, _itinerary_from_dict, load, serialize
+from results.view import SearchMeta, summary
+
+_META = SearchMeta(search_id=1, origin="LPA", destinations=("NRT",), currency="EUR",
+                   round_trip=True, strategy="two-stage", sampled_dates=1,
+                   window_days=15, fallback_through_fare=None)
 
 
 def _days_from_now(days: int) -> str:
@@ -83,12 +89,10 @@ def test_stored_round_trip_survives_the_json_round_trip():
 
 def test_stored_round_trip_still_renders_as_round_trip():
     restored = load(json.dumps(serialize([_round_trip_itinerary()]))).itineraries[0]
-    rendered = format_results([restored], "LPA")
-
-    assert "Round-trip" in rendered
-    assert "One-way" not in rendered
+    text, _ = summary(_META, StoredResults([restored], True), Filters(), 1)
+    assert "round-trip" in text
     # Both legs of the date range must show, not just the outbound.
-    assert "2026-09-01 — 2026-09-15" in rendered
+    assert "1 Sep → 15 Sep" in text
 
 
 # ── Task 12: legacy Route-shaped rows must still load and render ────────────
@@ -130,9 +134,11 @@ def test_legacy_route_shaped_row_loads_without_crashing():
     assert itin.return_date == ""
     assert float(itin.total) == pytest.approx(280.30)
 
-    rendered = format_results([itin], "LPA")
-    assert "Estimate only" in rendered
-    assert "href=" not in rendered
+    text, _ = summary(replace(_META, round_trip=False), StoredResults([itin], False),
+                      Filters(), 1)
+    assert "est." in text
+    assert "Historical snapshot" in text
+    assert "href=" not in text
 
 
 # ── Bug 3: trip_days was not persisted, causing false price-drop alerts ─────

@@ -140,12 +140,17 @@ claim than one only the primary provider could confirm.
   day in it) or tap individual days. Where the provider has a price
   calendar, days are marked with a direct-fare signal for your first
   destination.
-- **Ranked results** — cheapest itineraries with per-hub and per-date bests,
-  savings against the airline's own through-fare, and deep links straight to
-  each leg's booking page.
-- **Price tracking** — save a route and a background scheduler re-prices it
-  every few hours, alerting you when it drops more than 10% below its recorded
-  best.
+- **Live results** — the search runs in one message: progress with a
+  Cancel button, then a paged summary, cheapest first, with savings against
+  the airline's own through-fare. Open any result for each ticket's flights,
+  local times, bags, the time between tickets, and a booking link per ticket.
+- **Filters** — stops, total journey time, minimum time between tickets
+  and excluded airlines, applied to results already fetched: zero new
+  requests. A route the filters can't check is hidden and counted, never
+  silently dropped.
+- **Price tracking** — track any result, its exact dates or its route across
+  the whole window, and a background scheduler re-prices it every few hours,
+  alerting you when it drops more than 10% below its recorded best.
 - **Search history** — review any past search or re-run it with identical
   parameters.
 - **Bounded-concurrency scraper** — requests run in parallel under a
@@ -153,35 +158,61 @@ claim than one only the primary provider could confirm.
 
 ## Example output
 
+The summary, one page of five:
+
 ```
-Round-trip · Found 34 routes
-Best: 612.00 EUR (LPA->MAD->NRT on 2026-09-04 — 2026-09-18)
+LPA → NRT · round-trip · 34 routes
 
-Top 10 cheapest routes:
+Best 998 EUR
+Save 182.50 EUR (15%) vs the single ticket at 1,180.00 EUR
 
-#1  612.00 EUR (round-trip)
-  2026-09-04 — 2026-09-18 | LPA -> MAD (Madrid) -> NRT (NRT)
-  Domestic leg: 148.00 EUR (75% disc.) -> 37.00 EUR
-  Onward leg: 575.00 EUR
-  Domestic out | Onward out | Domestic return | Onward return
-  Warning: this itinerary requires re-checking bags between tickets.
-  Through-fare LPA->NRT   785.00 EUR
-  Split via MAD          612.00 EUR
-  You save               173.00 EUR (22%)
+1. 998 EUR  1 Oct → 15 Oct  via MAD
+2. 1,012 EUR  8 Oct → 22 Oct  via BCN
+3. 1,040 EUR  1 Oct → 15 Oct  via LIS · partial
+4. 1,061 EUR  3 Oct → 17 Oct  via MAD
+5. 1,090 EUR  8 Oct → 22 Oct  via BCN · est.
 
-#2  634.00 EUR (round-trip)
-  2026-09-11 — 2026-09-25 | LPA -> BCN (Barcelona) -> NRT (NRT)
+[1] [2] [3] [4] [5]
+[◀] [1/7] [▶]
+[⚙️ Filters] [🔍 New search] [🏠 Menu]
+```
+
+Tapping 1 opens its detail:
+
+```
+997.50 EUR · round-trip
+LPA → MAD (Madrid) → NRT (Tokyo)
+1 Oct → 15 Oct
+
+Outbound
+Ticket 1 · LPA → MAD · 25.00 EUR (100.00 EUR before 75% discount)
+  IB100 Iberia · 1 Oct 07:00 → 10:00 · 2h00m
+  direct · 2h00m · bags: 1 cabin, checked unknown
+  Book this ticket
+⏱ 3h00m between tickets at MAD
+Ticket 2 · MAD → NRT · 500.00 EUR
+  JL100 JAL · 1 Oct 13:00 → 09:00 · 13h00m
+  direct · 13h00m · bags: 1 cabin, 1 checked
+  Book this ticket
+
+Return
+Ticket 3 · NRT → MAD · 450.00 EUR
+  ...
+⏱ 3h00m between tickets at MAD
+Ticket 4 · MAD → LPA · 22.50 EUR (90.00 EUR before 75% discount)
   ...
 
-Best price per hub:
-  MAD (Madrid): 612.00 EUR on 2026-09-04 -> NRT
-  BCN (Barcelona): 634.00 EUR on 2026-09-11 -> NRT
-  LIS (Lisboa): 719.00 EUR on 2026-09-04 -> NRT
+Save 182.50 EUR (15%) vs the single ticket at 1,180.00 EUR
 
-Book each leg on its own, separate ticket — that is what lets the discounted
-domestic leg above actually receive its discount. A single through-fare ticket
-does not qualify for it.
+Book each ticket separately — only a separate domestic ticket gets the discount.
+
+[⭐ Track this trip] [📈 Track route]
+[◀ Back]
 ```
+
+`partial` marks a result where some tickets are real offers and some are
+still calendar prices; `est.` marks one priced from calendars alone. Neither
+has a booking link for the tickets that aren't real offers yet.
 
 The through-fare and savings lines come from actually pricing the airline's
 single-ticket fare (phase 2), not from an assumption that splitting always
@@ -244,12 +275,17 @@ engine/
   grid.py               sampled-date fallback for a provider with no calendar (Google)
   fetch.py              bounded-concurrency leg fetcher shared by every phase
   orchestrator.py       run_search: strategy selection, phase sequencing, cross-check
-search.py               Telegram/JSON presentation for engine results: formatting, history storage
+results/
+  store.py              the searches.results column: full-fidelity v2, and readers for older rows
+  filters.py            zero-request filters; unknown never passes
+  view.py               summary, detail, filters and progress screens -- text + buttons, no Telegram calls
+search.py               phase 0 calendar grid serialization
 scheduler.py            background price-tracking loop
 db.py                   async SQLite layer with in-place migrations
 handlers/
   start.py              /start, main menu, owner-only auth decorators
-  search_flow.py        run_and_report: run a search, report it, persist it
+  results.py            run_and_report, the live progress message, the results callbacks
+  anchor.py             one message edited in place, resent when it can't be
   search/               the guided search conversation
     draft.py            SearchDraft: fields, screen state, draft rendering
     builder.py          anchor message, single-state routing, Back

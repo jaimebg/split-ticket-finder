@@ -250,3 +250,41 @@ def test_search_meta_from_a_row():
 def test_page_size_is_five():
     assert PAGE_SIZE == 5
     assert re.search(r"5\. ", summary(META, StoredResults(_many(5), True), Filters(), 1)[0])
+
+
+# ── Ported from the deleted format_results tests (Layer 3b, Task 9) ─────────
+
+def test_detail_reminds_to_book_separately_only_when_discounted():
+    discounted = detail(META, StoredResults([standard_one_way()], True), 0, 1)[0]
+    assert "Book each ticket separately" in discounted
+    plain = detail(META, StoredResults([standard_one_way(discount="0")], True), 0, 1)[0]
+    assert "Book each ticket separately" not in plain
+
+
+def test_bag_recheck_silent_when_a_provider_says_no():
+    no_recheck = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", "2026-10-01T10:00"),
+                  requires_bag_recheck=False),
+        onward=offer("500", seg("MAD", "NRT", "2026-10-01T13:00", "2026-10-02T09:00"),
+                     requires_bag_recheck=False),
+    )
+    assert "re-check" not in detail(META, StoredResults([no_recheck], True), 0, 1)[0]
+
+
+def test_equal_prices_are_not_called_a_saving():
+    line = savings_text(standard_one_way(through_fare="525"), "EUR", None)
+    assert "Save" not in line and "-" not in line
+
+
+def test_every_screen_fits_one_telegram_message():
+    """Telegram rejects messages over 4096 characters; each screen is one
+    message edited in place, so there is no splitting to fall back on."""
+    many_hops = standard_round_trip(
+        onward_out=offer("500", *[seg("MAD" if i == 0 else f"X{i}", "NRT" if i == 3 else f"X{i + 1}",
+                                      f"2026-10-01T{10 + i:02d}:00", f"2026-10-01T{10 + i:02d}:50",
+                                      name="A" * 40) for i in range(4)]),
+    )
+    big = StoredResults([many_hops, *_many(40)], True)
+    for text, _ in (summary(META, big, Filters(), 3), detail(META, big, 0, 1),
+                    filters_screen(META, big, Filters())):
+        assert len(text) <= 4000
