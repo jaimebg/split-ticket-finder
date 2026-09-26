@@ -178,3 +178,18 @@ async def test_the_history_screen_and_a_deleted_favourite(temp_db, monkeypatch):
     gone = _upd(f"fh:{fav + 50}")
     await favorite_history(gone, None)
     assert gone.callback_query.edits[-1][0] == "That route is no longer tracked."
+
+
+async def test_every_favourite_gets_its_own_history_and_delete_buttons(temp_db, monkeypatch):
+    from handlers.favorites import favorites_menu
+
+    monkeypatch.setattr(start_module, "OWNER_ID", _OWNER_ID)
+    ids = [await db_module.add_favorite(origin="LPA", hub=hub, destination="NRT", adults=1,
+                                        currency="EUR", price=700.0, check_dates=["2026-10-01"])
+           for hub in ("MAD", "BCN", "LIS")]
+    update = _upd("menu_favorites")
+    await favorites_menu(update, None)
+    data = {b.callback_data for row in update.callback_query.edits[-1][1]["reply_markup"].inline_keyboard
+            for b in row}
+    for fav in ids:
+        assert f"fh:{fav}" in data and f"delfav_{fav}" in data

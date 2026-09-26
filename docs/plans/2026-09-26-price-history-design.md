@@ -89,7 +89,8 @@ these holds:
    **and** the last price is the lowest in `PRICE_HISTORY_DAYS`, **and**
    `last ≤ average × (1 − PRICE_DROP_THRESHOLD)`. The average here is computed
    over the earlier checks only, so the new low doesn't drag down its own
-   baseline.
+   baseline. It fires on the crossing only: if the previous check already
+   met the condition, a further drop is not re-alerted.
 
 A record drop also updates the record, as today. A trend alert does not change
 the record, and neither does anything else, so the record keeps meaning "the

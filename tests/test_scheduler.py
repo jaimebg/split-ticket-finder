@@ -444,3 +444,14 @@ async def test_both_triggers_send_one_alert_naming_both(temp_db, fake_engine):
     await check_favorites(bot, owner_chat_id=1)
     assert len(bot.messages) == 1
     assert "was 700" in bot.messages[0] and "below the average" in bot.messages[0]
+
+
+async def test_a_cent_lower_after_an_alert_does_not_alert_again(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(discount="0", dom_price="100", onward_price="600")]
+    await _favourite_with_history((800, 790, 810, 800, 805))
+    bot = FakeBot()
+    await check_favorites(bot, owner_chat_id=1)                        # 700: alert
+    fake_engine["state"]["itineraries"] = [
+        _itin(discount="0", dom_price="99.99", onward_price="600")]    # 699.99
+    await check_favorites(bot, owner_chat_id=1)
+    assert len(bot.messages) == 1

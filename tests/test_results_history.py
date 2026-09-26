@@ -154,3 +154,12 @@ def test_alert_text_for_each_trigger():
     only_trend = alert_text(FAV, origin="LPA", last=612, date="2026-10-01", record_before=None,
                             record_drop=False, trend=same_day, spark="")
     assert "612 EUR — lowest so far, 18% below the average (748)" in only_trend
+
+
+def test_trend_fires_on_the_crossing_not_on_every_cent_after_it(five_prior):
+    """Once the previous check already sat low against the trend, a further
+    cent off is not news: alert on the crossing, not on each new decimal."""
+    after_alert = [*five_prior, _c("2026-10-30", 700)]
+    assert trend_signal(after_alert, 699.99, today=TODAY) is None
+    after_null = [*after_alert, _c("2026-10-30", None)]
+    assert trend_signal(after_null, 699.99, today=TODAY) is None

@@ -48,11 +48,11 @@ async def _render_favorites(query, heading: str) -> None:
     for fav in favs:
         stats = price_stats(await get_price_checks(fav["id"]), today=date.today())
         lines.append(format_favorite(fav, ORIGIN, stats))
-    buttons.append([
-        InlineKeyboardButton("📈 History", callback_data=f"fh:{fav['id']}"),
-        InlineKeyboardButton(f"Delete {fav['hub']}->{fav['destination']}",
-                             callback_data=f"delfav_{fav['id']}"),
-    ])
+        buttons.append([
+            InlineKeyboardButton("📈 History", callback_data=f"fh:{fav['id']}"),
+            InlineKeyboardButton(f"Delete {fav['hub']}->{fav['destination']}",
+                                 callback_data=f"delfav_{fav['id']}"),
+        ])
 
     buttons.append([InlineKeyboardButton("Back", callback_data="menu_main")])
 

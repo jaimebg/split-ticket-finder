@@ -93,8 +93,19 @@ def trend_signal(prior: list[tuple[str, float | None]], last: float, *,
     *last* is strictly below every earlier price in the window and at least
     PRICE_DROP_THRESHOLD below their average. The average is over the
     earlier checks only, so the new low doesn't lower its own baseline.
+
+    It fires on the crossing only: when the previous priced check already met
+    the same condition, a further cent off is not news and would otherwise
+    alert on every run while a price drifts down.
     """
     points = _priced(prior)
+    signal = _trend(points, last, today)
+    if signal is not None and _trend(points[:-1], points[-1][1], today) is not None:
+        return None
+    return signal
+
+
+def _trend(points: list[tuple[date, float]], last: float, today: date) -> TrendSignal | None:
     if len(points) < config.ALERT_MIN_CHECKS:
         return None
     window = _window(points, today)
