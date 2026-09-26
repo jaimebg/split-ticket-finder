@@ -178,3 +178,13 @@ def test_a_real_places_request_still_returns_airports():
     assert node is not None, "places query returned no data"
     assert node.get("__typename") == "PlaceConnection", node
     assert node["edges"], "places came back empty for a well-known city"
+
+
+def test_cabin_class_values_are_still_the_four_we_send():
+    """SearchOptions.cabin is sent verbatim as CabinClassType."""
+    from providers.base import ALL_CABINS
+
+    q = 'query { __type(name: "CabinClassType") { enumValues { name } } }'
+    response = httpx.post(ENDPOINT, headers=HEADERS, json={"query": q}, timeout=30)
+    values = {v["name"] for v in response.json()["data"]["__type"]["enumValues"]}
+    assert set(ALL_CABINS) <= values
