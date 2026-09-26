@@ -17,6 +17,7 @@ import contextlib
 import json
 import logging
 import secrets
+from datetime import date as date_cls
 
 from telegram import Update
 from telegram.error import TelegramError
@@ -30,7 +31,7 @@ from handlers.anchor import render_anchor
 from handlers.search.draft import Button, Rows
 from handlers.start import owner_only_callback
 from handlers.utils import esc, load_json_list
-from models import CancelToken, Progress, SearchCancelled, SearchWindow
+from models import CancelToken, Progress, SearchCancelled, SearchWindow, bookable_onward_dates
 from providers.base import ProviderError, SearchOptions, SupportsCalendar, capabilities_of
 from providers.registry import primary_provider
 from results import store, view
@@ -189,8 +190,6 @@ async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | N
     must never be shown or stored, and a date the user did ask for must
     never be dropped.
     """
-    dates = params["dates"]
-    window = SearchWindow(start=min(dates), end=max(dates))
     currency = params["currency"]
     options = SearchOptions.from_mapping(params)
     refusal = capabilities_of(primary_provider()).rejects(options)
@@ -199,6 +198,17 @@ async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | N
         # button can carry an option this deployment's provider can't run.
         await render_anchor(bot, chat_id, message_id, refusal, view.MENU_ROWS)
         return
+
+    dates = bookable_onward_dates(params["dates"], options.overnight,
+                                  date_cls.today().isoformat())
+    if not dates:
+        await render_anchor(
+            bot, chat_id, message_id,
+            "With a night at the hub the domestic flight is the day before, so the "
+            "earliest international flight is tomorrow. Pick later dates.",
+            view.MENU_ROWS)
+        return
+    window = SearchWindow(start=min(dates), end=max(dates))
 
     run_id = secrets.token_hex(4)
     cancel = CancelToken()

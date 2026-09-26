@@ -35,7 +35,7 @@ def ground_time(landed: Segment, leaving: Segment) -> timedelta | None:
     return leaving.dep_local - landed.arr_local
 
 
-def _self_transfer(arriving: Offer | None, departing: Offer | None) -> timedelta | None:
+def self_transfer(arriving: Offer | None, departing: Offer | None) -> timedelta | None:
     """The gap between two separately booked tickets, or None if unknown."""
     if arriving is None or departing is None:
         return None
@@ -133,6 +133,20 @@ class Candidate:
     dom_price: Decimal                  # undiscounted, both directions if round-trip
     onward_price: Decimal
     discount: Decimal                   # fraction taken off the domestic leg
+    # A night at the hub: domestic legs a day early (out) / late (back).
+    overnight: bool = False
+
+    @property
+    def dom_date(self) -> str:
+        """The domestic outbound's day: the day before the onward flight overnight."""
+        return add_days(self.date, -1) if self.overnight else self.date
+
+    @property
+    def dom_return_date(self) -> str:
+        """The domestic return's day: the day after the onward return overnight."""
+        if not self.return_date:
+            return ""
+        return add_days(self.return_date, 1) if self.overnight else self.return_date
 
     @property
     def dom_discounted(self) -> Decimal:
@@ -181,6 +195,19 @@ class Itinerary:
     est_onward_price: Decimal | None = None
     through_fare: Decimal | None = None
     providers: tuple[str, ...] = ()
+    overnight: bool = False
+
+    @property
+    def dom_date(self) -> str:
+        """The domestic outbound's day: the day before the onward flight overnight."""
+        return add_days(self.date, -1) if self.overnight else self.date
+
+    @property
+    def dom_return_date(self) -> str:
+        """The domestic return's day: the day after the onward return overnight."""
+        if not self.return_date:
+            return ""
+        return add_days(self.return_date, 1) if self.overnight else self.return_date
 
     @property
     def confirmed(self) -> bool:
@@ -283,12 +310,12 @@ class Itinerary:
     @property
     def buffer_out(self) -> timedelta | None:
         """Time at the hub between the domestic and onward outbound tickets."""
-        return _self_transfer(self.dom_out, self.onward_out)
+        return self_transfer(self.dom_out, self.onward_out)
 
     @property
     def buffer_ret(self) -> timedelta | None:
         """Time at the hub between the onward and domestic return tickets."""
-        return _self_transfer(self.onward_ret, self.dom_ret)
+        return self_transfer(self.onward_ret, self.dom_ret)
 
     @property
     def savings(self) -> Decimal | None:
@@ -324,6 +351,7 @@ class Itinerary:
             discount=candidate.discount,
             est_dom_price=candidate.dom_price,
             est_onward_price=candidate.onward_price,
+            overnight=candidate.overnight,
         )
 
 
@@ -343,6 +371,18 @@ def generate_dates(start, end, every):
         dates.append(cur.strftime("%Y-%m-%d"))
         cur += timedelta(days=every)
     return dates
+
+
+def bookable_onward_dates(dates: list[str], overnight: bool, today: str) -> list[str]:
+    """The onward dates a search can actually fly.
+
+    With a night at the hub the domestic flight is the day before the onward
+    one, so an onward flight today would need a domestic flight yesterday.
+    Those dates are dropped rather than searched. *today* is "YYYY-MM-DD".
+    """
+    if not overnight:
+        return list(dates)
+    return [d for d in dates if d > today]
 
 
 def add_days(date, days):

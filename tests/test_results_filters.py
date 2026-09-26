@@ -136,3 +136,25 @@ def test_an_impossible_connection_never_passes_the_journey_time_filter():
     )
     assert impossible.buffer_out.total_seconds() < 0
     assert _shown([impossible], Filters(max_hours=24)) == []
+
+
+from tests.results_fixtures import onward_out
+
+
+def test_hide_risky_keeps_low_and_medium_only():
+    tight = one_way(dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", "2026-10-01T12:00")),
+                    onward=onward_out())                     # 1h -> HIGH
+    unknown = one_way(dom=offer("100"), onward=offer("500"))
+    estimate = one_way(est_dom_price=Decimal("29"), est_onward_price=Decimal("500"))
+    shown, hidden = apply([standard_one_way(), tight, unknown, estimate],
+                          Filters(hide_risky=True))
+    assert [i for i, _ in shown] == [0]
+    assert hidden == 3          # Review Focus #5: the estimate is hidden and counted
+
+
+def test_hide_risky_setting_and_persistence():
+    assert Filters().with_setting("r", "1") == Filters(hide_risky=True)
+    assert Filters(hide_risky=True).with_setting("r", "any") == Filters()
+    assert Filters(hide_risky=True).active == 1
+    assert Filters.from_dict(Filters(hide_risky=True).to_dict()).hide_risky is True
+    assert Filters.from_dict({"max_stops": 0}) == Filters(max_stops=0)   # pre-risk view_json

@@ -185,3 +185,17 @@ def _run(name, status="completed", conclusion="success"):
 )
 def test_ci_is_green_ignores_only_the_running_deploy_job(tmp_path, runs, green):
     assert _ci_is_green(tmp_path, runs) is green
+
+
+def test_env_example_parses_and_documents_the_risk_thresholds():
+    """config.validate() points operators at .env.example for every setting;
+    it must parse cleanly and list the ones this code reads."""
+    from dotenv import dotenv_values
+
+    path = DEPLOY.parent / ".env.example"
+    lines = [ln for ln in path.read_text().splitlines()
+             if ln.strip() and not ln.lstrip().startswith("#")]
+    assert all("=" in ln for ln in lines), [ln for ln in lines if "=" not in ln]
+    values = dotenv_values(path)
+    assert values["RISK_HIGH_BELOW_HOURS"] == "2"
+    assert values["RISK_MEDIUM_BELOW_HOURS"] == "4"

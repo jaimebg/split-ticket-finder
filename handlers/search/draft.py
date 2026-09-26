@@ -91,6 +91,7 @@ class SearchDraft:
     cabin: str = "ECONOMY"
     max_stops: int | None = None
     min_layover: int | None = None
+    overnight: bool = False
     screen: str = SCREEN_DRAFT
     awaiting: str | None = None
 
@@ -135,7 +136,7 @@ class SearchDraft:
     def options(self) -> SearchOptions:
         return SearchOptions(adults=self.adults, children=self.children, cabin=self.cabin,
                              currency=self.currency, max_stops=self.max_stops,
-                             min_layover=self.min_layover)
+                             min_layover=self.min_layover, overnight=self.overnight)
 
     @property
     def missing(self) -> tuple[str, ...]:
@@ -207,6 +208,8 @@ class SearchDraft:
                          else f"≤{self.max_stops} stop{'s' if self.max_stops > 1 else ''}")
         if self.min_layover is not None:
             parts.append(f"layover ≥{self.min_layover // 60}h")
+        if self.overnight:
+            parts.append("night at hub")
         return " · ".join(parts)
 
     def render(self, estimate: int | None = None) -> tuple[str, Rows]:

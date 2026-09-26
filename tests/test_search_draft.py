@@ -87,7 +87,7 @@ def test_to_params_matches_what_run_and_report_takes():
 
     assert set(params) == {"origin", "destinations", "dates", "hubs",
                            "adults", "currency", "trip_days",
-                           "children", "cabin", "max_stops", "min_layover"}
+                           "children", "cabin", "max_stops", "min_layover", "overnight"}
     assert params["origin"] == "LPA"
     assert params["destinations"] == {"NRT": "Tokyo Narita"}
     assert params["hubs"] == {"MAD": "Madrid"}
@@ -229,3 +229,9 @@ def test_the_options_row_replaces_the_read_only_footer():
     text, rows = d.render()
     assert "2 adults · Business · USD · ≤1 stop" in text
     assert "edit:opts" in [b.data for row in rows for b in row]
+
+
+def test_the_options_line_names_the_night_at_the_hub():
+    d = SearchDraft(origin="LPA", origin_name="Gran Canaria", overnight=True)
+    assert d.options.overnight is True
+    assert "night at hub" in d.render()[0]

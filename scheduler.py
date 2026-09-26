@@ -4,11 +4,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import date
 
 from config import ALERT_INTERVAL_HOURS, PRICE_DROP_THRESHOLD
 from db import add_price_check, get_favorites, update_favorite_price
 from engine import run_search
-from models import SearchWindow
+from models import SearchWindow, bookable_onward_dates
 from providers.base import SearchOptions, capabilities_of
 from providers.registry import get_provider, primary_provider
 
@@ -65,6 +66,13 @@ async def check_favorites(bot, owner_chat_id: int) -> None:
         # date coverage cost real queries; a price-calendar provider prices
         # the whole window for one request regardless of how wide it is, so
         # there is nothing left to save by sampling.
+        # A night at the hub can't fly an onward flight today: the domestic
+        # leg would be yesterday.
+        all_dates = bookable_onward_dates(all_dates, options.overnight,
+                                          date.today().isoformat())
+        if not all_dates:
+            logger.info("Favorite %d has no flyable dates left, skipping.", fav_id)
+            continue
         window = SearchWindow(start=min(all_dates), end=max(all_dates))
 
         # The query shape a favourite's price was quoted under has to be

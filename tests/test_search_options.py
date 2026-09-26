@@ -68,3 +68,12 @@ def test_render_marks_choices_and_hides_what_google_cannot_do():
 def test_every_callback_fits_64_bytes():
     _, rows = render(_draft(), KIWI)
     assert all(len(d.encode()) <= 64 for d in _data(rows))
+
+
+def test_the_night_at_the_hub_toggle():
+    on = apply(_draft(), "o:o:1", KIWI)
+    assert on.overnight is True
+    assert apply(on, "o:o:0", KIWI).overnight is False
+    assert isinstance(apply(_draft(), "o:o:yes", KIWI), str)
+    _, rows = render(on, GOOGLE)            # every provider can search any date
+    assert "o:o:0" in _data(rows)

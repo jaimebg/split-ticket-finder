@@ -36,8 +36,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from engine.drill import cheapest
 from engine.fetch import LegFetcher
+from engine.pairing import best_pair
 from models import Itinerary, SearchWindow, add_days, generate_dates
 from providers.base import Offer, SearchOptions
 
@@ -120,8 +120,8 @@ async def run_grid_search(
     leg the trip shape needs (domestic and onward outbound always, both
     returns too when ``trip_days > 0``) actually has an offer; a combination
     missing any leg is dropped rather than shown at a partial price, so
-    every result's ``.confirmed`` is ``True``. Each leg uses its cheapest
-    offer. The domestic-leg discount applies only when
+    every result's ``.confirmed`` is ``True``. Each direction takes the
+    cheapest pair in the best connection-risk level (engine.pairing). The domestic-leg discount applies only when
     ``hub in discount_airports``. Results are sorted cheapest (``.total``)
     first.
 
@@ -139,32 +139,36 @@ async def run_grid_search(
         else _sample_dates(window, max_dates)
     )
 
-    # ── Phase 1: outbound discounted leg (origin -> hubs) ───────────────────
+    shift = -1 if options.overnight else 0     # domestic day relative to the onward day
+
+    # ── Phase 1: outbound domestic leg (origin -> hubs) ─────────────────────
     phase1_queries = [
-        options.leg_query(origin, hub, date)
+        options.leg_query(origin, hub, add_days(date, shift))
         for hub in hubs
         for date in dates
     ]
     dom_out = await fetcher.fetch_many(phase1_queries, phase="Phase 1")
     if not dom_out:
         return []
+    # (hub, onward date) pairs phase 1 proved reachable.
+    reachable = [(hub, add_days(dom_date, -shift)) for (_, hub, dom_date) in dom_out]
 
-    # ── Phase 1R: return discounted leg (hubs -> origin) ────────────────────
+    # ── Phase 1R: return domestic leg (hubs -> origin), a day late overnight ─
     dom_ret: dict[tuple[str, str, str], list[Offer]] = {}
     if round_trip:
         phase1r_queries = [
-            options.leg_query(hub, origin, add_days(date, trip_days))
-            for (_, hub, date) in dom_out
+            options.leg_query(hub, origin, add_days(date, trip_days - shift))
+            for (hub, date) in reachable
         ]
         dom_ret = await fetcher.fetch_many(phase1r_queries, phase="Phase 1R")
 
     # ── Phase 2: outbound onward leg (hubs -> destinations) ─────────────────
     # Only (hub, date) pairs phase 1 proved reachable are queried here -- a
-    # hub with no flights from origin on any sampled date never appears as a
-    # key in dom_out, so it is never queried for onward flights either.
+    # hub with no flights from origin on any sampled date never appears in
+    # reachable, so it is never queried for onward flights either.
     phase2_queries = [
         options.leg_query(hub, dest, date)
-        for (_, hub, date) in dom_out
+        for (hub, date) in reachable
         for dest in dests
     ]
     onward_out = await fetcher.fetch_many(phase2_queries, phase="Phase 2")
@@ -180,7 +184,8 @@ async def run_grid_search(
 
     # ── Combine ──────────────────────────────────────────────────────────
     itineraries: list[Itinerary] = []
-    for (_, hub, date), dom_out_offers in dom_out.items():
+    for (hub, date) in reachable:
+        dom_out_offers = dom_out[(origin, hub, add_days(date, shift))]
         for dest in dests:
             onward_out_offers = onward_out.get((hub, dest, date))
             if not onward_out_offers:
@@ -190,12 +195,17 @@ async def run_grid_search(
             dom_ret_offers: list[Offer] | None = None
             onward_ret_offers: list[Offer] | None = None
             if round_trip:
-                dom_ret_offers = dom_ret.get((hub, origin, return_date))
+                dom_ret_offers = dom_ret.get((hub, origin, add_days(return_date, -shift)))
                 onward_ret_offers = onward_ret.get((dest, hub, return_date))
                 if not dom_ret_offers or not onward_ret_offers:
                     continue
 
             rate = discount if hub in discount_airports else Decimal(0)
+            dom_o, onward_o = best_pair(dom_out_offers, onward_out_offers, first_discount=rate)
+            onward_r = dom_r = None
+            if round_trip:
+                onward_r, dom_r = best_pair(onward_ret_offers, dom_ret_offers,
+                                            second_discount=rate)
 
             itineraries.append(Itinerary(
                 date=date,
@@ -205,10 +215,11 @@ async def run_grid_search(
                 dest=dest,
                 dest_name=dest_names.get(dest, dest),
                 discount=rate,
-                dom_out=cheapest(dom_out_offers),
-                dom_ret=cheapest(dom_ret_offers) if dom_ret_offers else None,
-                onward_out=cheapest(onward_out_offers),
-                onward_ret=cheapest(onward_ret_offers) if onward_ret_offers else None,
+                dom_out=dom_o,
+                dom_ret=dom_r,
+                onward_out=onward_o,
+                onward_ret=onward_r,
+                overnight=options.overnight,
             ))
 
     itineraries.sort(key=lambda itin: itin.total)

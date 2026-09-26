@@ -373,3 +373,15 @@ async def test_a_pre_3c_favourite_replays_as_the_defaults(temp_db, fake_engine):
     )
     await check_favorites(FakeBot(), owner_chat_id=1)
     assert fake_engine["calls"][0]["options"] == SearchOptions()
+
+
+async def test_an_overnight_favourite_is_not_rechecked_for_today(temp_db, fake_engine):
+    from datetime import date, timedelta
+
+    today, tomorrow = date.today(), date.today() + timedelta(days=1)
+    await db_module.add_favorite(
+        origin="LPA", hub="MAD", destination="NRT", adults=1, currency="EUR",
+        price=None, check_dates=[str(today), str(tomorrow)], trip_days=0, overnight=True,
+    )
+    await check_favorites(FakeBot(), owner_chat_id=1)
+    assert fake_engine["calls"][0]["dates"] == [str(tomorrow)]

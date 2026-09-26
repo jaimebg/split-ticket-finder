@@ -74,9 +74,9 @@ CREATE TABLE price_checks (
 
 SEARCHES_NEW_COLUMNS = {
     "window_start", "window_end", "provider", "through_fare", "scan_json", "strategy", "view_json",
-    "children", "cabin", "max_stops", "min_layover",
+    "children", "cabin", "max_stops", "min_layover", "overnight",
 }
-FAVORITES_NEW_COLUMNS = {"provider", "cabin", "children", "max_stops", "min_layover"}
+FAVORITES_NEW_COLUMNS = {"provider", "cabin", "children", "max_stops", "min_layover", "overnight"}
 
 
 def _columns(path: str, table: str) -> set[str]:
@@ -467,3 +467,16 @@ async def test_save_search_records_the_options(temp_db):
     row = await db_module.get_search_by_id(search_id)
     assert (row["children"], row["cabin"], row["max_stops"], row["min_layover"]) == \
         (1, "BUSINESS", 1, 90)
+
+
+async def test_overnight_is_stored_for_searches_and_favourites(temp_db):
+    sid = await db_module.save_search(
+        origin="LPA", destinations=["NRT"], dates=["2026-10-01"], hubs=["MAD"],
+        adults=1, currency="EUR", best_price=None, best_route=None, results=None,
+        overnight=True,
+    )
+    assert (await db_module.get_search_by_id(sid))["overnight"] == 1
+    await db_module.add_favorite(origin="LPA", hub="MAD", destination="NRT", adults=1,
+                                 currency="EUR", price=None, check_dates=["2026-10-01"],
+                                 overnight=True)
+    assert (await db_module.get_favorites())[0]["overnight"] == 1

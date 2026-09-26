@@ -140,7 +140,7 @@ def test_detail_of_a_round_trip_has_four_tickets_and_two_connections():
     text, _ = detail(META, StoredResults([standard_round_trip()], True), 0, 1)
     for n in (1, 2, 3, 4):
         assert f"Ticket {n}" in text
-    assert text.count("between tickets") == 2
+    assert text.count("⏱") == 2          # one connection line per direction
 
 
 def test_detail_flags_an_airport_change_and_an_impossible_connection():
@@ -170,8 +170,8 @@ def test_detail_warns_about_bag_recheck_only_when_true():
                                             "2026-10-01T10:00"),
                                 requires_bag_recheck=True),
                       onward=onward_out())
-    assert "re-check" in detail(META, StoredResults([recheck], True), 0, 1)[0]
-    assert "re-check" not in detail(META, StoredResults([standard_one_way()], True), 0, 1)[0]
+    assert "You must collect and re-check bags" in detail(META, StoredResults([recheck], True), 0, 1)[0]
+    assert "You must collect and re-check bags" not in detail(META, StoredResults([standard_one_way()], True), 0, 1)[0]
 
 
 def test_detail_of_an_undetailed_row_is_a_labelled_snapshot():
@@ -268,7 +268,7 @@ def test_bag_recheck_silent_when_a_provider_says_no():
         onward=offer("500", seg("MAD", "NRT", "2026-10-01T13:00", "2026-10-02T09:00"),
                      requires_bag_recheck=False),
     )
-    assert "re-check" not in detail(META, StoredResults([no_recheck], True), 0, 1)[0]
+    assert "You must collect and re-check bags" not in detail(META, StoredResults([no_recheck], True), 0, 1)[0]
 
 
 def test_equal_prices_are_not_called_a_saving():
@@ -332,3 +332,45 @@ def test_search_meta_reads_the_options():
     row = {"id": 1, "adults": 2, "children": None, "cabin": "BUSINESS", "currency": "USD"}
     assert SearchMeta.from_row(row).options == SearchOptions(adults=2, cabin="BUSINESS",
                                                              currency="USD")
+
+
+def _tight_return():
+    return standard_round_trip(
+        dom_ret=offer("90", seg("MAD", "LPA", "2026-10-15T19:00", "2026-10-15T20:45")))
+
+
+def test_the_summary_marks_a_tight_connection_with_its_own_gap():
+    """Review Focus #2: the outbound has 3h, the return 1h; the 1h is shown."""
+    meta = replace(META, round_trip=True)
+    text, _ = summary(meta, StoredResults([_tight_return()], True), Filters(), 1)
+    assert "⚠️ 1h00m" in text
+    assert "3h00m" not in text
+
+
+def test_impossible_and_unknown_are_marked_and_low_is_not():
+    impossible = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", "2026-10-01T14:00")),
+        onward=onward_out())
+    unknown = one_way(dom=offer("100"), onward=offer("500"))
+    text, _ = summary(META, StoredResults([impossible, unknown, standard_one_way()], True),
+                      Filters(), 1)
+    assert "⛔ impossible" in text and "❔ times unknown" in text
+    assert text.count("⚠️") == 0
+
+
+def test_the_detail_states_the_risk_and_the_separate_ticket_reminder():
+    text, _ = detail(META, StoredResults([standard_one_way()], True), 0, 1)
+    assert "Connection risk: Medium" in text
+    assert "3h00m between tickets at MAD" in text
+    assert "the second airline won't wait" in text
+
+
+def test_a_night_at_the_hub_is_called_out_and_not_priced():
+    night = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-09-30T18:00", "2026-09-30T21:00")),
+        onward=onward_out(), overnight=True)
+    text, _ = summary(META, StoredResults([night], True), Filters(), 1)
+    assert "🌙" in text
+    detail_text, _ = detail(META, StoredResults([night], True), 0, 1)
+    assert "1 night in Madrid before your flight — not included in the price" in detail_text
+    assert "Connection risk: Low" in detail_text

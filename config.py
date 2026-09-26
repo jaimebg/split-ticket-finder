@@ -183,6 +183,11 @@ PLACE_CACHE_TTL_HOURS = _int_env("PLACE_CACHE_TTL_HOURS", 720, lo=1)
 ALERT_INTERVAL_HOURS = _int_env("ALERT_INTERVAL_HOURS", 6, lo=1)
 PRICE_DROP_THRESHOLD = _float_env("PRICE_DROP_THRESHOLD", 0.10, lo=0.0, hi=1.0)
 
+# Self-transfer risk (engine/risk.py): below HIGH hours between tickets a
+# connection is high risk, below MEDIUM it is medium, otherwise low.
+RISK_HIGH_BELOW_HOURS = _float_env("RISK_HIGH_BELOW_HOURS", 2.0, lo=0.0, hi=48.0)
+RISK_MEDIUM_BELOW_HOURS = _float_env("RISK_MEDIUM_BELOW_HOURS", 4.0, lo=0.0, hi=72.0)
+
 # ── Engine tuning ────────────────────────────────────────
 # The two-stage engine's own knobs. Defaults are the numbers the engine was
 # measured against end to end, single provider, 8 hubs x 3 destinations,
@@ -243,6 +248,11 @@ def validate() -> None:
         problems.append(
             f"MAX_PER_DATE ({MAX_PER_DATE}) is greater than SHORTLIST_SIZE ({SHORTLIST_SIZE}) "
             "— it would never actually cap anything"
+        )
+    if not 0 < RISK_HIGH_BELOW_HOURS < RISK_MEDIUM_BELOW_HOURS:
+        problems.append(
+            f"RISK_HIGH_BELOW_HOURS ({RISK_HIGH_BELOW_HOURS}) must be above 0 and below "
+            f"RISK_MEDIUM_BELOW_HOURS ({RISK_MEDIUM_BELOW_HOURS})"
         )
     if problems:
         raise ConfigError(

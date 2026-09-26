@@ -148,10 +148,19 @@ claim than one only the primary provider could confirm.
   Cancel button, then a paged summary, cheapest first, with savings against
   the airline's own through-fare. Open any result for each ticket's flights,
   local times, bags, the time between tickets, and a booking link per ticket.
-- **Filters** — stops, total journey time, minimum time between tickets
-  and excluded airlines, applied to results already fetched: zero new
+- **Filters** — stops, total journey time, minimum time between tickets,
+  connection risk and excluded airlines, applied to results already fetched: zero new
   requests. A route the filters can't check is hidden and counted, never
   silently dropped.
+- **Connection risk** — a self-transfer is two contracts: miss the second
+  flight and its airline owes you nothing. Each result is rated low, medium,
+  high or impossible from the time between tickets (an airport change counts
+  as high), and the pairing itself prefers a connection you can make over a
+  cheaper one you can't. "Hide risky" leaves only low and medium.
+- **Night at the hub** — an option that flies the domestic leg the day before
+  the international one (and the day after on the way back), for a
+  stress-free connection. Same request count; the night is called out, not
+  priced.
 - **Price tracking** — track any result, its exact dates or its route across
   the whole window, and a background scheduler re-prices it every few hours,
   alerting you when it drops more than 10% below its recorded best.

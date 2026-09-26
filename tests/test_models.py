@@ -504,3 +504,23 @@ def test_ground_time_is_the_same_rule_for_a_layover_inside_one_ticket():
     landed = seg("MAD", "CDG", "2026-10-01T13:00", "2026-10-01T15:00")
     leaving = seg("CDG", "NRT", "2026-10-01T16:30", "2026-10-02T11:00")
     assert ground_time(landed, leaving) == timedelta(minutes=90)
+
+
+from decimal import Decimal as _D
+
+
+def test_overnight_moves_only_the_domestic_dates():
+    c = Candidate(date="2026-10-01", return_date="2026-10-15", hub="MAD", dest="NRT",
+                  dom_price=_D(1), onward_price=_D(1), discount=_D(0), overnight=True)
+    assert (c.dom_date, c.dom_return_date) == ("2026-09-30", "2026-10-16")
+    plain = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",
+                      dom_price=_D(1), onward_price=_D(1), discount=_D(0))
+    assert (plain.dom_date, plain.dom_return_date) == ("2026-10-01", "")
+
+
+def test_an_itinerary_from_an_overnight_candidate_stays_overnight():
+    from models import Itinerary
+    c = Candidate(date="2026-10-01", return_date="", hub="MAD", dest="NRT",
+                  dom_price=_D(1), onward_price=_D(1), discount=_D(0), overnight=True)
+    itin = Itinerary.from_candidate(c, "Madrid", "Tokyo")
+    assert itin.overnight and itin.dom_date == "2026-09-30"

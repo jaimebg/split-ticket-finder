@@ -272,4 +272,7 @@ def caption(draft: SearchDraft, dest_code: str | None = None, *,
             f"<i>Colours: direct-fare signal · {esc(draft.origin)}→{esc(dest_code)}. "
             "Not the split price.</i>"
         )
+    if draft.overnight:
+        lines.append("<i>🌙 These are the international flight's dates; the domestic "
+                     "flight is the day before.</i>")
     return "\n".join(lines)

@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS searches (
     children     INTEGER,           -- NULL = 0 (pre-3c)
     cabin        TEXT,              -- CabinClassType; NULL = ECONOMY
     max_stops    INTEGER,           -- NULL = no limit
-    min_layover  INTEGER            -- minutes; NULL = no minimum
+    min_layover  INTEGER,           -- minutes; NULL = no minimum
+    overnight    INTEGER            -- 1 = a night at the hub; NULL = off
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS favorites (
     children      INTEGER NOT NULL DEFAULT 0,
     max_stops     INTEGER,          -- NULL = no limit applied
     min_layover   INTEGER,          -- minutes; NULL = no minimum applied
+    overnight     INTEGER,          -- 1 = a night at the hub; NULL = off
     record_price  REAL,
     record_date   TEXT,
     last_price    REAL,
@@ -132,6 +134,9 @@ MIGRATIONS = (
     ("searches", "cabin", "TEXT"),
     ("searches", "max_stops", "INTEGER"),
     ("searches", "min_layover", "INTEGER"),
+    # A night at the hub (connection risk).
+    ("searches", "overnight", "INTEGER"),
+    ("favorites", "overnight", "INTEGER"),
 )
 
 
@@ -175,6 +180,7 @@ async def save_search(
     cabin: str = "ECONOMY",
     max_stops: int | None = None,
     min_layover: int | None = None,
+    overnight: bool = False,
 ) -> int:
     """Insert a completed search and return its row id.
 
@@ -200,8 +206,8 @@ async def save_search(
                 (origin, destinations, dates, hubs, adults, currency, trip_days,
                  window_start, window_end, provider,
                  best_price, best_route, through_fare, results, scan_json, strategy,
-                 children, cabin, max_stops, min_layover)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 children, cabin, max_stops, min_layover, overnight)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin,
@@ -224,6 +230,7 @@ async def save_search(
                 cabin,
                 max_stops,
                 min_layover,
+                int(overnight),
             ),
         )
         await db.commit()
@@ -276,6 +283,7 @@ async def add_favorite(
     children: int = 0,
     max_stops: int | None = None,
     min_layover: int | None = None,
+    overnight: bool = False,
 ) -> int:
     """Add a route to favorites and return its row id.
 
@@ -302,9 +310,9 @@ async def add_favorite(
             """
             INSERT INTO favorites
                 (origin, hub, destination, adults, currency, trip_days,
-                 provider, cabin, children, max_stops, min_layover,
+                 provider, cabin, children, max_stops, min_layover, overnight,
                  record_price, record_date, last_price, last_checked, check_dates)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin,
@@ -318,6 +326,7 @@ async def add_favorite(
                 children,
                 max_stops,
                 min_layover,
+                int(overnight),
                 price,
                 now if price is not None else None,
                 price,
