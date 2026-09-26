@@ -436,3 +436,71 @@ def test_progress_reports_a_fraction():
 
 def test_progress_fraction_is_zero_when_total_is_zero():
     assert Progress(phase="Phase 0", done=0, total=0).fraction == 0.0
+
+# ── Self-transfer buffers (Layer 3b) ─────────────────────────────────────────
+
+from datetime import timedelta
+
+from models import ground_time
+from tests.results_fixtures import (
+    offer,
+    one_way,
+    seg,
+    standard_one_way,
+    standard_round_trip,
+)
+
+
+def test_buffer_out_is_the_time_on_the_ground_at_the_hub():
+    assert standard_one_way().buffer_out == timedelta(hours=3)
+
+
+def test_buffer_ret_is_measured_on_the_return_at_the_hub():
+    assert standard_round_trip().buffer_ret == timedelta(hours=3)
+
+
+def test_a_one_way_has_no_return_buffer():
+    assert standard_one_way().buffer_ret is None
+
+
+def test_an_airport_change_is_unknown_not_a_number():
+    """Local times at two different airports are in different timezones;
+    subtracting them is meaningless, so the buffer must be unknown."""
+    itin = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", "2026-10-01T10:00")),
+        onward=offer("500", seg("TOJ", "NRT", "2026-10-01T13:00", "2026-10-02T09:00")),
+    )
+    assert itin.buffer_out is None
+
+
+def test_a_missing_time_makes_the_buffer_unknown():
+    itin = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", None)),
+        onward=offer("500", seg("MAD", "NRT", "2026-10-01T13:00", "2026-10-02T09:00")),
+    )
+    assert itin.buffer_out is None
+
+
+def test_a_missing_offer_makes_the_buffer_unknown():
+    assert one_way(dom=None, onward=standard_one_way().onward_out).buffer_out is None
+
+
+def test_an_offer_without_segments_makes_the_buffer_unknown():
+    itin = one_way(dom=offer("100"), onward=standard_one_way().onward_out)
+    assert itin.buffer_out is None
+
+
+def test_an_impossible_connection_is_a_negative_buffer_not_hidden():
+    """The second ticket leaving before the first lands is a real,
+    reportable problem. It must come back negative, not as None."""
+    itin = one_way(
+        dom=offer("100", seg("LPA", "MAD", "2026-10-01T07:00", "2026-10-01T14:00")),
+        onward=offer("500", seg("MAD", "NRT", "2026-10-01T13:00", "2026-10-02T09:00")),
+    )
+    assert itin.buffer_out == timedelta(hours=-1)
+
+
+def test_ground_time_is_the_same_rule_for_a_layover_inside_one_ticket():
+    landed = seg("MAD", "CDG", "2026-10-01T13:00", "2026-10-01T15:00")
+    leaving = seg("CDG", "NRT", "2026-10-01T16:30", "2026-10-02T11:00")
+    assert ground_time(landed, leaving) == timedelta(minutes=90)
