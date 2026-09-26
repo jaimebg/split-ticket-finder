@@ -23,13 +23,13 @@ from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
-from db import get_search_by_id, save_search, set_search_view
+from db import add_favorite, get_search_by_id, save_search, set_search_view
 from engine import run_search
 from engine.orchestrator import STRATEGY_GRID, STRATEGY_TWO_STAGE
 from handlers.anchor import render_anchor
 from handlers.search.draft import Button, Rows
 from handlers.start import owner_only_callback
-from handlers.utils import esc
+from handlers.utils import esc, load_json_list
 from models import CancelToken, Progress, SearchCancelled, SearchWindow
 from providers.base import SupportsCalendar
 from providers.registry import primary_provider
@@ -370,6 +370,25 @@ async def on_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if args:
                 await set_search_view(search_id, {"filters": filters.to_dict(), "page": 1})
             text, rows = view.filters_screen(meta, stored, filters)
+        elif action in ("t", "T"):
+            index = int(args[0])
+            if not 0 <= index < len(stored.itineraries):
+                raise LookupError(index)
+            itin = stored.itineraries[index]
+            searched = [str(d) for d in load_json_list(row.get("dates"))]
+            await add_favorite(
+                origin=meta.origin, hub=itin.hub, destination=itin.dest,
+                adults=row.get("adults") or 1, currency=meta.currency,
+                price=float(itin.total),
+                check_dates=[itin.date] if action == "t" else (searched or [itin.date]),
+                trip_days=row.get("trip_days") or 0,
+                # The provider that priced *this* itinerary, so the scheduler
+                # replays the same query shape (see add_favorite's docstring).
+                provider=itin.providers[0] if itin.providers else row.get("provider"),
+            )
+            await query.answer("Tracking this trip." if action == "t"
+                               else "Tracking this route.")
+            return
         else:
             raise LookupError(action)
     except (LookupError, ValueError):

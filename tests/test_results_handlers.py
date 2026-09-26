@@ -254,3 +254,32 @@ async def test_history_view_opens_the_results_summary(temp_db):
     assert "1 routes" in text
     data = [b.callback_data for row in kw["reply_markup"].inline_keyboard for b in row]
     assert f"r:{sid}:d:0" in data
+
+
+async def test_track_this_trip_watches_its_exact_date(temp_db):
+    sid = await _saved(serialize([standard_one_way(), standard_one_way(date="2026-10-05",
+                                                                     hub="BCN")]),
+                       dates=["2026-10-01", "2026-10-05"])
+    bot, update = await _tap(f"r:{sid}:t:1")
+
+    fav = (await db_module.get_favorites())[0]
+    assert fav["hub"] == "BCN"
+    assert json.loads(fav["check_dates"]) == ["2026-10-05"]
+    assert fav["record_price"] == 525.0
+    assert fav["provider"] == "kiwi"
+    assert update.callback_query.answers == [("Tracking this trip.", False)]
+    assert bot.log == [], "the detail stays on screen"
+
+
+async def test_track_route_watches_every_searched_date(temp_db):
+    sid = await _saved(serialize([standard_one_way()]),
+                       dates=["2026-10-01", "2026-10-05"])
+    await _tap(f"r:{sid}:T:0")
+    fav = (await db_module.get_favorites())[0]
+    assert json.loads(fav["check_dates"]) == ["2026-10-01", "2026-10-05"]
+
+
+async def test_tracking_a_stale_index_changes_nothing(temp_db):
+    sid = await _saved(serialize([standard_one_way()]))
+    await _tap(f"r:{sid}:t:9")
+    assert await db_module.get_favorites() == []
