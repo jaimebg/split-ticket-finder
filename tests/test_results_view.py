@@ -310,3 +310,25 @@ def test_a_v2_result_without_its_own_through_fare_claims_no_saving():
 def test_the_row_fare_still_backs_an_undetailed_legacy_row():
     meta = replace(META, fallback_through_fare=Decimal("800"))
     assert "Save" in detail(meta, StoredResults([standard_one_way()], False), 0, 1)[0]
+
+
+from providers.base import SearchOptions
+
+
+def test_the_summary_names_a_non_default_party():
+    meta = replace(META, options=SearchOptions(adults=2, children=1, cabin="BUSINESS"))
+    text, _ = summary(meta, StoredResults(_many(1), True), Filters(), 1)
+    assert "2 adults, 1 child · Business" in text
+    assert "adult" not in summary(META, StoredResults(_many(1), True), Filters(), 1)[0]
+
+
+def test_the_detail_says_the_price_is_for_everyone():
+    meta = replace(META, options=SearchOptions(adults=2, children=1))
+    assert "total for 3 passengers" in detail(meta, StoredResults(_many(1), True), 0, 1)[0]
+    assert "passengers" not in detail(META, StoredResults(_many(1), True), 0, 1)[0]
+
+
+def test_search_meta_reads_the_options():
+    row = {"id": 1, "adults": 2, "children": None, "cabin": "BUSINESS", "currency": "USD"}
+    assert SearchMeta.from_row(row).options == SearchOptions(adults=2, cabin="BUSINESS",
+                                                             currency="USD")
