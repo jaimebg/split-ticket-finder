@@ -12,10 +12,36 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from providers.base import Offer
+from providers.base import Offer, Segment
 
 # Money is rounded to cents only where a value is derived; never at input.
 _CENTS = Decimal("0.01")
+
+
+def ground_time(landed: Segment, leaving: Segment) -> timedelta | None:
+    """Time between *landed* arriving and *leaving* departing, at one airport.
+
+    Segment times are local to their own airport, so subtracting two of them
+    is only meaningful when both are at the *same* airport: then they share a
+    timezone. That is exactly the case for a connection. An airport change
+    (arrive at one airport, leave from another) returns None, as does a
+    missing time. A negative result is kept: it means the connection is
+    impossible, which a caller must be able to report.
+    """
+    if landed.dest != leaving.origin:
+        return None
+    if landed.arr_local is None or leaving.dep_local is None:
+        return None
+    return leaving.dep_local - landed.arr_local
+
+
+def _self_transfer(arriving: Offer | None, departing: Offer | None) -> timedelta | None:
+    """The gap between two separately booked tickets, or None if unknown."""
+    if arriving is None or departing is None:
+        return None
+    if not arriving.segments or not departing.segments:
+        return None
+    return ground_time(arriving.segments[-1], departing.segments[0])
 
 
 class SearchCancelled(RuntimeError):
@@ -55,6 +81,9 @@ class Progress:
     done: int
     total: int
     best_total: Decimal | None = None
+    # False while best_total is only a calendar estimate (phase 0b's cheapest
+    # candidate); True once it is the cheapest confirmed itinerary.
+    best_confirmed: bool = False
 
     @property
     def fraction(self) -> float:
@@ -250,6 +279,16 @@ class Itinerary:
         if any(a is None for a in answers):
             return None
         return False
+
+    @property
+    def buffer_out(self) -> timedelta | None:
+        """Time at the hub between the domestic and onward outbound tickets."""
+        return _self_transfer(self.dom_out, self.onward_out)
+
+    @property
+    def buffer_ret(self) -> timedelta | None:
+        """Time at the hub between the onward and domestic return tickets."""
+        return _self_transfer(self.onward_ret, self.dom_ret)
 
     @property
     def savings(self) -> Decimal | None:

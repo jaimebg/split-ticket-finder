@@ -2,70 +2,24 @@
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
+import handlers.results as results_module
 from config import DEFAULT_HUBS, ORIGIN
 from db import get_search_by_id, get_searches
+from handlers.anchor import markup
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only_callback
-from handlers.utils import esc, load_json_list, split_message
-from models import Itinerary
+from handlers.utils import esc, load_json_list
+from results import view
+from results.filters import Filters
+from results.store import load
 
 logger = logging.getLogger(__name__)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-
-def _itinerary_from_dict(d: dict) -> Itinerary:
-    """Reconstruct an ``Itinerary`` from a stored result dict.
-
-    Handles both the shape ``search.itineraries_to_json`` now writes
-    (``discount``/``onward_price``/``through_fare``) and the pre-engine
-    ``Route`` shape it replaced (``dom_price``/``dom_discounted``/
-    ``intl_price``, no ``discount`` field at all) — the two rows in the live
-    ``flight_finder.db`` are this older shape, and must still load.
-
-    Neither shape carries a real ``Offer``, so a row reloaded from storage
-    always comes back unconfirmed (``est_dom_price``/``est_onward_price``
-    only): the numbers are a historical snapshot, not a fresh, bookable
-    quote, and ``format_results`` labels it an estimate accordingly.
-
-    ``return_date`` matters beyond display: ``format_results`` uses it to
-    decide whether the stored prices are round-trip totals, so dropping it
-    would render a round-trip search as one-way with round-trip prices.
-    """
-    dom_price = Decimal(str(d["dom_price"]))
-    onward_price = Decimal(str(d.get("onward_price", d.get("intl_price", 0))))
-
-    if "discount" in d:
-        discount = Decimal(str(d["discount"]))
-    elif dom_price:
-        # Old Route rows never stored the discount fraction directly, only
-        # both sides of it (dom_price, dom_discounted) — recover it from
-        # those so the stored total still reproduces exactly.
-        dom_discounted = Decimal(str(d.get("dom_discounted", dom_price)))
-        discount = Decimal(1) - dom_discounted / dom_price
-    else:
-        discount = Decimal(0)
-
-    through_fare_raw = d.get("through_fare")
-    through_fare = Decimal(str(through_fare_raw)) if through_fare_raw is not None else None
-
-    return Itinerary(
-        date=d["date"],
-        return_date=d.get("return_date", ""),
-        hub=d["hub"],
-        hub_name=d.get("hub_name", d["hub"]),
-        dest=d["dest"],
-        dest_name=d.get("dest_name", d["dest"]),
-        discount=discount,
-        est_dom_price=dom_price,
-        est_onward_price=onward_price,
-        through_fare=through_fare,
-    )
-
 
 # ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -110,8 +64,6 @@ async def history_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @owner_only_callback
 async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View stored results for a past search."""
-    from search import format_results
-
     query = update.callback_query
     await query.answer()
 
@@ -122,34 +74,25 @@ async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.edit_message_text("Search not found.", reply_markup=MAIN_MENU_KEYBOARD)
         return
 
-    result_dicts = load_json_list(row.get("results"))
-    if not result_dicts:
+    stored = load(row.get("results"))
+    if not stored.itineraries:
         await query.edit_message_text(
             "No results stored for this search.",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return
 
-    itineraries = [_itinerary_from_dict(d) for d in result_dicts]
-    row_through_fare = row.get("through_fare")
-    through_fare = Decimal(str(row_through_fare)) if row_through_fare is not None else None
-    text = format_results(
-        itineraries, row.get("origin") or ORIGIN, row.get("currency") or "EUR",
-        through_fare=through_fare,
-    )
-
-    chunks = split_message(text)
-    await query.edit_message_text(chunks[0], parse_mode="HTML", disable_web_page_preview=True)
-    for chunk in chunks[1:]:
-        await query.message.reply_text(
-            chunk, parse_mode="HTML", disable_web_page_preview=True
-        )
+    state = results_module._view_state(row)
+    text, rows = view.summary(view.SearchMeta.from_row(row), stored,
+                              Filters.from_dict(state.get("filters")), 1)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup(rows),
+                                  disable_web_page_preview=True)
 
 
 @owner_only_callback
 async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Rerun a past search with the same parameters."""
-    from handlers.search_flow import run_and_report
+    from handlers.results import RUNS_KEY, run_and_report
 
     query = update.callback_query
     await query.answer()
@@ -192,7 +135,8 @@ async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     context.application.create_task(
-        run_and_report(context.application.bot, update.effective_chat.id, params),
+        run_and_report(context.application.bot, update.effective_chat.id, params,
+                       runs=context.application.bot_data.setdefault(RUNS_KEY, {})),
         update=update,
     )
 

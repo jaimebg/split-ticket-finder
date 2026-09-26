@@ -1006,3 +1006,68 @@ async def test_cross_check_secondary_bare_provider_error_keeps_the_primary_resul
 
     assert len(result.itineraries) == 1
     assert result.itineraries[0].providers == (primary.name,)
+
+# ── Running best price on progress ticks (Layer 3b) ─────────────────────────
+
+
+def _by_phase(ticks):
+    phases: dict[str, list[Progress]] = {}
+    for t in ticks:
+        phases.setdefault(t.phase, []).append(t)
+    return phases
+
+
+async def test_best_total_is_absent_then_estimated_then_confirmed(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = _one_hub_scenario()
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    ticks: list[Progress] = []
+
+    await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=provider, on_progress=ticks.append,
+    )
+
+    phases = _by_phase(ticks)
+    assert all(t.best_total is None for t in phases["Phase 0"])
+    # Calendar prices 29 + 500: an estimate, until phase 1 confirms 25 + 480.
+    assert all(t.best_total == Decimal("529") and not t.best_confirmed
+               for t in phases["Phase 1"])
+    assert all(t.best_total == Decimal("505") and t.best_confirmed
+               for t in phases["Phase 2"])
+
+
+async def test_grid_best_total_is_confirmed_once_the_legs_are_in(monkeypatch):
+    _neutral_discount(monkeypatch)
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-10-01"): [_offer("25")],
+        ("MAD", "NRT", "2026-10-01"): [_offer("480")],
+        ("LPA", "NRT", "2026-10-01"): [_offer_pnr("700")],
+    })
+    monkeypatch.setattr(orchestrator, "enabled_providers", lambda: {"p": provider})
+    ticks: list[Progress] = []
+
+    await run_search(
+        origin="LPA", destinations={"NRT": "Tokyo"}, hubs={"MAD": "Madrid"},
+        window=WINDOW, trip_days=0, provider=provider, on_progress=ticks.append,
+    )
+
+    phases = _by_phase(ticks)
+    assert all(t.best_total is None for t in phases["Phase 1"])
+    assert all(t.best_total == Decimal("505") and t.best_confirmed
+               for t in phases[orchestrator.GRID_THROUGH_FARE_PHASE])
+
+
+async def test_relabelled_ticks_keep_the_best_price(monkeypatch):
+    """_PhaseRelabeler rebuilds a Progress when it renames a phase; it must
+    not drop the stamped best on the way."""
+    _neutral_discount(monkeypatch)
+    ticks: list[Progress] = []
+    relabel = orchestrator._PhaseRelabeler(ticks.append)
+    relabel.retitle({"Phase 1": "Phase 1 (cross-check)"})
+
+    relabel(Progress(phase="Phase 1", done=1, total=2, best_total=Decimal("9"),
+                     best_confirmed=True))
+
+    assert ticks == [Progress(phase="Phase 1 (cross-check)", done=1, total=2,
+                              best_total=Decimal("9"), best_confirmed=True)]

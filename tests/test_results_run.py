@@ -4,7 +4,7 @@
 Layer 2's review found the branch's own invariants stop being enforced: the
 discrete date list the user actually asked for gets silently widened into a
 window (C1), and error counters are collected and thrown away (C2). These
-tests fake ``engine.run_search`` (imported into ``handlers.search_flow``'s
+tests fake ``engine.run_search`` (imported into ``handlers.results``'s
 own namespace) and a Telegram bot, the same "fake the engine call, not the
 provider layer" approach ``tests/test_scheduler.py`` uses for
 ``check_favorites`` -- ``run_and_report`` is a plain async function, not a
@@ -16,28 +16,42 @@ directly as the pure functions they are.
 """
 from __future__ import annotations
 
-import json
+import asyncio
+import re
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 import db as db_module
-import handlers.search_flow as search_flow_module
+import handlers.results as results_module
 from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
-from handlers.search_flow import _oversized_window_message, run_and_report
+from handlers.results import _oversized_window_message, run_and_report
 from models import Itinerary
 from providers.base import Offer
+from results.store import load
 
 
 class FakeBot:
-    """Records every message the handler tries to send."""
+    """Records every text the handler shows, edits and sends alike, in order."""
 
-    def __init__(self):
+    def __init__(self, *, edit_errors=None):
         self.messages: list[str] = []
+        self.markups: list = []
+        self.edit_errors = list(edit_errors or [])
+        self._next_id = 100
 
     async def send_message(self, chat_id, text, **kwargs):
         self.messages.append(text)
+        self.markups.append(kwargs.get("reply_markup"))
+        self._next_id += 1
+        return SimpleNamespace(message_id=self._next_id)
+
+    async def edit_message_text(self, text, **kwargs):
+        if self.edit_errors:
+            raise self.edit_errors.pop(0)
+        self.messages.append(text)
+        self.markups.append(kwargs.get("reply_markup"))
 
 
 class _FakeCalendarProvider:
@@ -83,7 +97,7 @@ def _itin(*, date, hub="MAD", dest="NRT", return_date="",
 
 @pytest.fixture
 def fake_engine(monkeypatch):
-    """Replace handlers.search_flow.run_search with a scripted fake."""
+    """Replace handlers.results.run_search with a scripted fake."""
     calls: list[dict] = []
     state = {"itineraries": [], "parse_errors": 0, "fetch_errors": 0, "scan": None}
 
@@ -94,9 +108,11 @@ def fake_engine(monkeypatch):
             parse_errors=state["parse_errors"],
             fetch_errors=state["fetch_errors"],
             scan=state["scan"],
+            strategy="two-stage",
         )
 
-    monkeypatch.setattr(search_flow_module, "run_search", fake_run_search)
+    monkeypatch.setattr(results_module, "run_search", fake_run_search)
+    monkeypatch.setattr(results_module, "primary_provider", lambda: _FakeCalendarProvider())
     return {"calls": calls, "state": state}
 
 
@@ -142,14 +158,12 @@ async def test_fixed_date_search_returns_results_only_on_requested_dates(
     await run_and_report(bot, chat_id=1, params=params)
 
     sent_text = "\n".join(bot.messages)
-    assert "2026-09-01" in sent_text
-    assert "2026-09-20" in sent_text
-    assert "2026-09-05" not in sent_text
-    assert "2026-09-10" not in sent_text
-    assert "2026-09-15" not in sent_text
+    assert "1 Sep" in sent_text and "20 Sep" in sent_text
+    for absent in ("5 Sep", "10 Sep", "15 Sep"):
+        assert not re.search(rf"(?<!\d){absent}", sent_text)
 
     stored = (await db_module.get_searches(1))[0]
-    stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
+    stored_result_dates = {it.date for it in load(stored["results"]).itineraries}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
 
 
@@ -171,7 +185,7 @@ async def test_two_date_selection_19_days_apart_does_not_return_an_in_between_da
     await run_and_report(bot, chat_id=1, params=params)
 
     stored = (await db_module.get_searches(1))[0]
-    stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
+    stored_result_dates = {it.date for it in load(stored["results"]).itineraries}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
     assert "2026-09-09" not in stored_result_dates
 
@@ -187,10 +201,9 @@ async def test_a_date_the_user_asked_for_is_never_dropped_by_filtering(temp_db, 
     bot = FakeBot()
     await run_and_report(bot, chat_id=1, params=params)
 
-    best_message = bot.messages[-1]
-    assert "2026-09-01" in best_message or "2026-09-20" in best_message  # a "Track" offer exists
+    assert "2 routes" in bot.messages[-1]
     stored = (await db_module.get_searches(1))[0]
-    stored_result_dates = {r["date"] for r in json.loads(stored["results"])}
+    stored_result_dates = {it.date for it in load(stored["results"]).itineraries}
     assert stored_result_dates == {"2026-09-01", "2026-09-20"}
 
 
@@ -228,7 +241,7 @@ async def test_a_partial_result_still_shows_results_with_the_note_appended_below
 ):
     """A partial result (some itineraries survived alongside some errors) is
     genuinely different from a total failure: there are real results to
-    show, so format_results still runs and the caveat is appended below
+    show, so the summary still renders and the caveat is appended below
     them, where "the results above" is an accurate description -- this
     behaviour must stay exactly as it was."""
     fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]
@@ -240,7 +253,7 @@ async def test_a_partial_result_still_shows_results_with_the_note_appended_below
     await run_and_report(bot, chat_id=1, params=params)
 
     sent_text = "\n".join(bot.messages)
-    assert "2026-09-01" in sent_text
+    assert "1 Sep" in sent_text  # the result is still shown
     assert "incomplete" in sent_text
     assert "Search incomplete" not in sent_text  # that headline is total-failure only
 
@@ -263,10 +276,10 @@ async def test_a_clean_search_with_no_errors_says_nothing_extra(temp_db, fake_en
 
 def test_estimate_queries_two_stage_matches_the_documented_formula(monkeypatch):
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=12, round_trip=True)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=12, round_trip=True)
 
     phase0 = 8 * (1 + 3) * 2
     phase1 = SHORTLIST_SIZE * 4
@@ -281,10 +294,10 @@ def test_estimate_queries_two_stage_is_close_to_the_real_measured_count(monkeypa
     claim. The new estimate must land within a small margin of the real
     figure, not the old grid-shaped one."""
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=14, round_trip=True)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=14, round_trip=True)
 
     assert n < 250          # nowhere near the old formula's 768
     assert abs(n - 190) < 50  # in the neighbourhood of the real measured count
@@ -292,10 +305,10 @@ def test_estimate_queries_two_stage_is_close_to_the_real_measured_count(monkeypa
 
 def test_estimate_queries_grid_uses_the_sampled_date_count_not_the_raw_one(monkeypatch):
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=50, round_trip=False)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=50, round_trip=False)
 
     assert n == 8 * FALLBACK_MAX_DATES * (1 + 3)
 
@@ -304,10 +317,10 @@ def test_estimate_queries_grid_matches_the_old_formula_when_dates_fit_under_the_
     monkeypatch,
 ):
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=5, round_trip=True)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=5, round_trip=True)
 
     assert n == 8 * 5 * (1 + 3) * 2
 
@@ -349,15 +362,15 @@ async def test_run_and_report_surfaces_a_valueerrors_message_instead_of_the_gene
     async def raising_run_search(**kwargs):
         raise ValueError(human_message)
 
-    monkeypatch.setattr(search_flow_module, "run_search", raising_run_search)
+    monkeypatch.setattr(results_module, "run_search", raising_run_search)
     bot = FakeBot()
     params = _base_params(dates=["2026-01-01", "2026-06-01"])
 
     await run_and_report(bot, chat_id=1, params=params)
 
-    assert len(bot.messages) == 1
-    assert "91-day limit" in bot.messages[0]
-    assert "check the bot logs" not in bot.messages[0]
+    assert len(bot.messages) == 2
+    assert "91-day limit" in bot.messages[-1]
+    assert "check the bot logs" not in bot.messages[-1]
 
 
 async def test_run_and_report_still_uses_the_generic_message_for_other_exceptions(
@@ -368,11 +381,89 @@ async def test_run_and_report_still_uses_the_generic_message_for_other_exception
     async def raising_run_search(**kwargs):
         raise RuntimeError("provider is down")
 
-    monkeypatch.setattr(search_flow_module, "run_search", raising_run_search)
+    monkeypatch.setattr(results_module, "run_search", raising_run_search)
     bot = FakeBot()
     params = _base_params()
 
     await run_and_report(bot, chat_id=1, params=params)
 
-    assert len(bot.messages) == 1
-    assert "check the bot logs" in bot.messages[0]
+    assert len(bot.messages) == 2
+    assert "check the bot logs" in bot.messages[-1]
+
+from models import CancelToken, Progress
+
+
+async def test_the_search_shows_a_cancel_button_while_it_runs(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]
+    bot = FakeBot()
+    await run_and_report(bot, chat_id=1, params=_base_params(dates=["2026-09-01"]))
+
+    assert bot.messages[0] == "Starting search…"
+    first = bot.markups[0].inline_keyboard[0][0]
+    assert first.callback_data.startswith("x:")
+
+
+async def test_results_replace_the_progress_message_in_place(temp_db, fake_engine):
+    fake_engine["state"]["itineraries"] = [_itin(date="2026-09-01")]
+    bot = FakeBot()
+    await run_and_report(bot, chat_id=1, params=_base_params(dates=["2026-09-01"]),
+                         message_id=42)
+
+    assert bot.messages[0] == "Starting search…"
+    assert "1 routes" in bot.messages[-1]
+    buttons = [b.callback_data for row in bot.markups[-1].inline_keyboard for b in row]
+    assert any(d.startswith("r:") and ":d:0" in d for d in buttons)
+
+
+async def test_cancel_saves_nothing_and_says_so(temp_db, monkeypatch):
+    async def cancelling_run_search(**kwargs):
+        kwargs["cancel"].cancel()
+        kwargs["cancel"].raise_if_cancelled()
+
+    monkeypatch.setattr(results_module, "run_search", cancelling_run_search)
+    monkeypatch.setattr(results_module, "primary_provider", lambda: _FakeCalendarProvider())
+    runs: dict[str, CancelToken] = {}
+    bot = FakeBot()
+
+    await run_and_report(bot, chat_id=1, params=_base_params(), runs=runs)
+
+    assert bot.messages[-1] == "Search cancelled."
+    assert await db_module.get_searches(1) == []
+    assert runs == {}, "a finished run must leave the registry"
+
+
+async def test_progress_ticks_reach_the_message(temp_db, monkeypatch):
+    async def ticking_run_search(**kwargs):
+        kwargs["on_progress"](Progress(phase="Phase 1", done=3, total=10,
+                                       best_total=Decimal("612"), best_confirmed=True))
+        await asyncio.sleep(0.05)
+        return SimpleNamespace(itineraries=[], parse_errors=0, fetch_errors=0,
+                               scan=None, strategy="two-stage")
+
+    monkeypatch.setattr(results_module, "run_search", ticking_run_search)
+    monkeypatch.setattr(results_module, "primary_provider", lambda: _FakeCalendarProvider())
+    bot = FakeBot()
+
+    await run_and_report(bot, chat_id=1, params=_base_params(), interval=0.01)
+
+    assert "Confirming flights… 3/10\nBest so far: 612 EUR" in bot.messages
+
+
+async def test_a_failed_progress_edit_does_not_stop_the_search(temp_db, monkeypatch):
+    """Review Focus #5."""
+    from telegram.error import NetworkError
+
+    async def ticking_run_search(**kwargs):
+        kwargs["on_progress"](Progress(phase="Phase 0", done=1, total=4))
+        await asyncio.sleep(0.05)
+        return SimpleNamespace(itineraries=[_itin(date="2026-09-01")], parse_errors=0,
+                               fetch_errors=0, scan=None, strategy="two-stage")
+
+    monkeypatch.setattr(results_module, "run_search", ticking_run_search)
+    monkeypatch.setattr(results_module, "primary_provider", lambda: _FakeCalendarProvider())
+    bot = FakeBot(edit_errors=[NetworkError("flaky")])
+
+    await run_and_report(bot, chat_id=1, params=_base_params(dates=["2026-09-01"]),
+                         message_id=42, interval=0.01)
+
+    assert "1 routes" in bot.messages[-1]

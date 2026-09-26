@@ -13,7 +13,7 @@ Two things live here that no other module can cover:
   path, and ``_load_ratings``'s cache key. These fail silently on a wrong
   mapping or a swallowed exception, so a review found them under-tested;
   a fake Update/context (``SimpleNamespace``, following
-  ``tests/test_search_flow.py``'s "fake the bot, not the Telegram
+  ``tests/test_results_run.py``'s "fake the bot, not the Telegram
   scaffolding" approach) stands in for real PTB objects.
 
 Every other rule worth testing on its own lives in draft.py, dates.py,
@@ -158,7 +158,7 @@ async def test_rows_become_a_real_inline_keyboard():
 # These handlers are plain async functions wrapped in @owner_only_callback /
 # @owner_only, so a SimpleNamespace standing in for Update/context is enough
 # -- no real telegram.Update/CallbackContext is built, matching
-# tests/test_search_flow.py's "fake the bot, not the scaffolding" approach.
+# tests/test_results_run.py's "fake the bot, not the scaffolding" approach.
 
 
 @pytest.fixture(autouse=True)
@@ -208,6 +208,7 @@ class FakeApplication:
 
     def __init__(self, bot):
         self.bot = bot
+        self.bot_data: dict = {}
         self.scheduled: list = []
 
     def create_task(self, coro, update=None):
@@ -384,56 +385,36 @@ async def test_go_alerts_the_missing_field_and_schedules_nothing():
     assert not update.callback_query.edits
 
 
-async def test_go_schedules_run_and_report_with_the_draft_s_params(monkeypatch):
+async def test_go_schedules_run_and_report_in_the_anchor(monkeypatch):
+    """The builder's anchor becomes the search's live message: go() hands
+    its id to run_and_report instead of editing it into a dead end."""
     calls = []
 
-    async def fake_run_and_report(bot, chat_id, params):
-        calls.append((bot, chat_id, params))
+    async def fake_run_and_report(bot, chat_id, params, **kwargs):
+        calls.append((bot, chat_id, params, kwargs))
 
     monkeypatch.setattr(builder, "run_and_report", fake_run_and_report)
 
     context = _context()
     draft = _draft(**_READY_DRAFT_KWARGS)
     _set_draft(context, draft)
+    context.user_data[builder._ANCHOR] = 42
     update = _cb_update("go", chat_id=777)
 
     result = await builder.go(update, context)
 
     assert result == ConversationHandler.END
-    assert update.callback_query.edits == ["On it — I'll message you when it's done."]
+    assert update.callback_query.edits == []
     assert len(context.application.scheduled) == 1
 
     await context.application.scheduled[0]
-    bot, chat_id, params = calls[0]
+    bot, chat_id, params, kwargs = calls[0]
     assert bot is context.application.bot
     assert chat_id == 777
     assert params == draft.to_params()
+    assert kwargs["message_id"] == 42
+    assert kwargs["runs"] is context.application.bot_data["runs"]
     assert context.user_data == {}, "the draft must not survive a launched search"
-
-
-async def test_go_still_schedules_the_search_when_the_edit_fails(monkeypatch):
-    """FIX 3: query.answer() has already fired, so an edit failure here must
-    not be the reason a search is never launched -- every other render on
-    this branch absorbs BadRequest/Forbidden through render_anchor; go()
-    must not be the one bare exception to that."""
-    calls = []
-
-    async def fake_run_and_report(bot, chat_id, params):
-        calls.append((bot, chat_id, params))
-
-    monkeypatch.setattr(builder, "run_and_report", fake_run_and_report)
-
-    context = _context()
-    draft = _draft(**_READY_DRAFT_KWARGS)
-    _set_draft(context, draft)
-    update = _cb_update("go", chat_id=777, edit_error=BadRequest("message to edit not found"))
-
-    result = await builder.go(update, context)
-
-    assert result == ConversationHandler.END
-    assert len(context.application.scheduled) == 1
-    await context.application.scheduled[0]
-    assert calls, "the search must still be scheduled and run"
 
 
 # ── place_tap's MAX_DESTINATIONS cap ─────────────────────────────────────────

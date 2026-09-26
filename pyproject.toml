@@ -29,7 +29,7 @@ dependencies = [
 # explicit list) means a new subpackage under any of these -- handlers/search/
 # was the last one -- is picked up without editing this file again.
 [tool.setuptools.packages.find]
-include = ["engine*", "handlers*", "providers*"]
+include = ["engine*", "handlers*", "providers*", "results*"]
 
 # The flat modules beside those packages. Tests import db, config, models and
 # search directly, and bot is the entry point.

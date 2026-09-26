@@ -12,7 +12,7 @@ This module must not import telegram, directly or transitively. That is
 what lets its tests run with no Update/Context scaffolding, and it is why
 render() returns button tuples rather than an InlineKeyboardMarkup and
 takes the query estimate as an argument rather than computing it (
-_estimate_queries lives in handlers/search_flow.py, which does import
+_estimate_queries lives in handlers/results.py, which does import
 telegram).
 """
 from __future__ import annotations

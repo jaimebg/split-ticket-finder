@@ -72,7 +72,9 @@ CREATE TABLE price_checks (
 );
 """
 
-SEARCHES_NEW_COLUMNS = {"window_start", "window_end", "provider", "through_fare", "scan_json"}
+SEARCHES_NEW_COLUMNS = {
+    "window_start", "window_end", "provider", "through_fare", "scan_json", "strategy", "view_json",
+}
 FAVORITES_NEW_COLUMNS = {"provider", "cabin", "children", "max_stops", "min_layover"}
 
 
@@ -321,7 +323,7 @@ async def test_add_favorite_defaults_query_shape_columns(temp_db):
 
 
 async def test_save_search_old_call_shape_still_works(temp_db):
-    """Exactly the call shape handlers/search_flow.py uses today."""
+    """Exactly the call shape handlers/results.py uses today."""
     search_id = await save_search(
         origin="LPA",
         destinations=["JFK"],
@@ -432,3 +434,24 @@ async def test_place_cache_overwrites_rather_than_duplicating(temp_db):
     await db_module.put_cached_places("Tokyo", [{"code": "HND"}])
 
     assert await db_module.get_cached_places("Tokyo") == [{"code": "HND"}]
+
+
+async def test_save_search_records_the_strategy(temp_db):
+    search_id = await db_module.save_search(
+        origin="LPA", destinations=["NRT"], dates=["2026-10-01"], hubs=["MAD"],
+        adults=1, currency="EUR", best_price=None, best_route=None, results=None,
+        strategy="grid",
+    )
+    row = await db_module.get_search_by_id(search_id)
+    assert row["strategy"] == "grid"
+    assert row["view_json"] is None
+
+
+async def test_set_search_view_round_trips(temp_db):
+    search_id = await db_module.save_search(
+        origin="LPA", destinations=["NRT"], dates=["2026-10-01"], hubs=["MAD"],
+        adults=1, currency="EUR", best_price=None, best_route=None, results=None,
+    )
+    await db_module.set_search_view(search_id, {"filters": {"max_stops": 0}, "page": 2})
+    row = await db_module.get_search_by_id(search_id)
+    assert json.loads(row["view_json"]) == {"filters": {"max_stops": 0}, "page": 2}
