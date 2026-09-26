@@ -480,3 +480,14 @@ async def test_overnight_is_stored_for_searches_and_favourites(temp_db):
                                  currency="EUR", price=None, check_dates=["2026-10-01"],
                                  overnight=True)
     assert (await db_module.get_favorites())[0]["overnight"] == 1
+
+
+async def test_price_checks_come_back_oldest_first_even_on_a_tie(temp_db):
+    fav = await db_module.add_favorite(origin="LPA", hub="MAD", destination="NRT", adults=1,
+                                       currency="EUR", price=None, check_dates=["2026-10-01"])
+    for price in (700.0, None, 650.0):
+        await db_module.add_price_check(fav, price, None)    # same second: id breaks the tie
+    checks = await db_module.get_price_checks(fav)
+    assert [p for _, p in checks] == [700.0, None, 650.0]
+    assert (await db_module.get_favorite(fav))["id"] == fav
+    assert await db_module.get_favorite(fav + 99) is None

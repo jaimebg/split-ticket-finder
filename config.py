@@ -188,6 +188,13 @@ PRICE_DROP_THRESHOLD = _float_env("PRICE_DROP_THRESHOLD", 0.10, lo=0.0, hi=1.0)
 RISK_HIGH_BELOW_HOURS = _float_env("RISK_HIGH_BELOW_HOURS", 2.0, lo=0.0, hi=48.0)
 RISK_MEDIUM_BELOW_HOURS = _float_env("RISK_MEDIUM_BELOW_HOURS", 4.0, lo=0.0, hi=72.0)
 
+# Price history (results/history.py): the window the average and the trend
+# alert look back over, how many points the sparkline shows, and how many
+# earlier checks a trend alert needs before it can fire.
+PRICE_HISTORY_DAYS = _int_env("PRICE_HISTORY_DAYS", 30, lo=1)
+SPARK_POINTS = _int_env("SPARK_POINTS", 20, lo=2)
+ALERT_MIN_CHECKS = _int_env("ALERT_MIN_CHECKS", 5, lo=1)
+
 # ── Engine tuning ────────────────────────────────────────
 # The two-stage engine's own knobs. Defaults are the numbers the engine was
 # measured against end to end, single provider, 8 hubs x 3 destinations,

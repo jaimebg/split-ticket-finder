@@ -349,6 +349,15 @@ async def get_favorites() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+async def get_favorite(fav_id: int) -> dict | None:
+    """One favourite by id, or None."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM favorites WHERE id = ?", (fav_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
 async def delete_favorite(fav_id: int) -> bool:
     """Delete a favorite by id. Returns True if a row was deleted."""
     async with _connect() as db:
@@ -414,6 +423,16 @@ async def add_price_check(
         )
         await db.commit()
         return cursor.lastrowid
+
+
+async def get_price_checks(fav_id: int) -> list[tuple[str, float | None]]:
+    """A favourite's checks as (checked_at, best_price), oldest first. Checks
+    in the same second keep their insertion order (id breaks the tie)."""
+    async with _connect() as db:
+        cursor = await db.execute(
+            "SELECT checked_at, best_price FROM price_checks WHERE favorite_id = ? "
+            "ORDER BY checked_at, id", (fav_id,))
+        return [(row[0], row[1]) for row in await cursor.fetchall()]
 
 
 # ── Place cache (spec §7.1) ──────────────────────────────────────────────────
