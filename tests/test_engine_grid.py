@@ -405,3 +405,26 @@ def test_sample_explicit_dates_keeps_first_and_last_and_dedupes():
 def test_sample_explicit_dates_returns_all_deduped_when_under_the_cap():
     dates = ["2026-09-05", "2026-09-01", "2026-09-01"]
     assert _sample_explicit_dates(dates, 5) == ["2026-09-01", "2026-09-05"]
+
+
+from tests.results_fixtures import offer as timed_offer
+from tests.results_fixtures import seg
+
+
+async def test_the_grid_pairs_flights_that_can_connect():
+    too_late = timed_offer("20", seg("LPA", "MAD", "2026-10-01T10:00", "2026-10-01T14:00"))
+    in_time = timed_offer("45", seg("LPA", "MAD", "2026-10-01T06:00", "2026-10-01T08:00"))
+    onward = timed_offer("300", seg("MAD", "NRT", "2026-10-01T13:00", "2026-10-02T09:00"))
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-10-01"): [too_late, in_time],
+        ("MAD", "NRT", "2026-10-01"): [onward],
+    })
+
+    [itin] = await run_grid_search(
+        _fetcher(provider), origin="LPA", dests=["NRT"], hubs=["MAD"],
+        window=SearchWindow("2026-10-01", "2026-10-01"), trip_days=0,
+        hub_names={}, dest_names={}, discount_airports=set(), discount=Decimal(0),
+        options=SearchOptions(),
+    )
+
+    assert itin.dom_out is in_time

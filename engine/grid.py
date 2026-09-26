@@ -36,8 +36,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from engine.drill import cheapest
 from engine.fetch import LegFetcher
+from engine.pairing import best_pair
 from models import Itinerary, SearchWindow, add_days, generate_dates
 from providers.base import Offer, SearchOptions
 
@@ -120,8 +120,8 @@ async def run_grid_search(
     leg the trip shape needs (domestic and onward outbound always, both
     returns too when ``trip_days > 0``) actually has an offer; a combination
     missing any leg is dropped rather than shown at a partial price, so
-    every result's ``.confirmed`` is ``True``. Each leg uses its cheapest
-    offer. The domestic-leg discount applies only when
+    every result's ``.confirmed`` is ``True``. Each direction takes the
+    cheapest pair in the best connection-risk level (engine.pairing). The domestic-leg discount applies only when
     ``hub in discount_airports``. Results are sorted cheapest (``.total``)
     first.
 
@@ -196,6 +196,11 @@ async def run_grid_search(
                     continue
 
             rate = discount if hub in discount_airports else Decimal(0)
+            dom_o, onward_o = best_pair(dom_out_offers, onward_out_offers, first_discount=rate)
+            onward_r = dom_r = None
+            if round_trip:
+                onward_r, dom_r = best_pair(onward_ret_offers, dom_ret_offers,
+                                            second_discount=rate)
 
             itineraries.append(Itinerary(
                 date=date,
@@ -205,10 +210,10 @@ async def run_grid_search(
                 dest=dest,
                 dest_name=dest_names.get(dest, dest),
                 discount=rate,
-                dom_out=cheapest(dom_out_offers),
-                dom_ret=cheapest(dom_ret_offers) if dom_ret_offers else None,
-                onward_out=cheapest(onward_out_offers),
-                onward_ret=cheapest(onward_ret_offers) if onward_ret_offers else None,
+                dom_out=dom_o,
+                dom_ret=dom_r,
+                onward_out=onward_o,
+                onward_ret=onward_r,
             ))
 
     itineraries.sort(key=lambda itin: itin.total)

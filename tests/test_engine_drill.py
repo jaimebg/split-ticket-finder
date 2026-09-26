@@ -498,3 +498,27 @@ async def test_through_fares_feeds_itinerary_savings_and_absent_pair_stays_none(
     assert priced_itin.savings_pct == 37
     assert unpriced_itin.savings is None
     assert unpriced_itin.savings_pct is None
+
+
+from tests.results_fixtures import offer as timed_offer
+from tests.results_fixtures import seg
+
+
+async def test_confirm_pairs_flights_that_can_connect():
+    """The cheapest domestic flight lands after the onward leaves; confirm
+    must pair the dearer one that makes the connection."""
+    too_late = timed_offer("20", seg("LPA", "MAD", "2026-10-01T10:00", "2026-10-01T14:00"))
+    in_time = timed_offer("45", seg("LPA", "MAD", "2026-10-01T06:00", "2026-10-01T08:00"))
+    onward = timed_offer("300", seg("MAD", "NRT", "2026-10-01T13:00", "2026-10-02T09:00"))
+    provider = FakeProvider({
+        ("LPA", "MAD", "2026-10-01"): [too_late, in_time],
+        ("MAD", "NRT", "2026-10-01"): [onward],
+    })
+
+    [itin] = await confirm(
+        _fetcher(provider), [_cand("2026-10-01", "MAD", "NRT")], origin="LPA",
+        trip_days=0, hub_names={}, dest_names={}, discount_airports=set(),
+        discount=Decimal(0), options=SearchOptions(),
+    )
+
+    assert itin.dom_out is in_time

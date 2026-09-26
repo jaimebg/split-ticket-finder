@@ -32,6 +32,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from engine.fetch import LegFetcher
+from engine.pairing import best_pair
 from engine.shortlist import legs_for
 from models import Candidate, Itinerary
 from providers.base import LegQuery, Offer, SearchOptions
@@ -62,7 +63,8 @@ async def confirm(
 
     Builds ``LegQuery`` objects from ``legs_for`` and fetches them all in one
     ``fetch_many`` call, then assembles one ``Itinerary`` per candidate from
-    the cached results, taking each leg's cheapest offer. A candidate whose
+    the cached results. Each direction takes the cheapest pair in the best
+    connection-risk level (engine.pairing). A candidate whose
     legs are not all present -- domestic and onward outbound always,
     domestic and onward return too when ``trip_days > 0`` -- is dropped
     rather than emitted with a missing side reading as free.
@@ -90,7 +92,7 @@ async def confirm(
     for cand in candidates:
         dom_out_offers = offers_by_leg.get((origin, cand.hub, cand.date))
         onward_out_offers = offers_by_leg.get((cand.hub, cand.dest, cand.date))
-        if dom_out_offers is None or onward_out_offers is None:
+        if not dom_out_offers or not onward_out_offers:
             continue
 
         dom_ret_offers: list[Offer] | None = None
@@ -98,10 +100,15 @@ async def confirm(
         if round_trip:
             dom_ret_offers = offers_by_leg.get((cand.hub, origin, cand.return_date))
             onward_ret_offers = offers_by_leg.get((cand.dest, cand.hub, cand.return_date))
-            if dom_ret_offers is None or onward_ret_offers is None:
+            if not dom_ret_offers or not onward_ret_offers:
                 continue
 
         rate = discount if cand.hub in discount_airports else Decimal(0)
+        dom_out, onward_out = best_pair(dom_out_offers, onward_out_offers, first_discount=rate)
+        dom_ret = onward_ret = None
+        if round_trip:
+            onward_ret, dom_ret = best_pair(onward_ret_offers, dom_ret_offers,
+                                            second_discount=rate)
 
         itineraries.append(Itinerary(
             date=cand.date,
@@ -111,10 +118,10 @@ async def confirm(
             dest=cand.dest,
             dest_name=dest_names.get(cand.dest, cand.dest),
             discount=rate,
-            dom_out=cheapest(dom_out_offers),
-            dom_ret=cheapest(dom_ret_offers) if dom_ret_offers else None,
-            onward_out=cheapest(onward_out_offers),
-            onward_ret=cheapest(onward_ret_offers) if onward_ret_offers else None,
+            dom_out=dom_out,
+            dom_ret=dom_ret,
+            onward_out=onward_out,
+            onward_ret=onward_ret,
         ))
 
     itineraries.sort(key=lambda itin: itin.total)
