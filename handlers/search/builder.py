@@ -31,6 +31,7 @@ from handlers.anchor import render_anchor
 from handlers.results import RUNS_KEY, _estimate_queries, run_and_report
 from handlers.search import dates as dates_mod
 from handlers.search import hubs as hubs_mod
+from handlers.search import options as options_mod
 from handlers.search import places as places_mod
 from handlers.search.draft import (
     AWAIT_DEST,
@@ -42,6 +43,7 @@ from handlers.search.draft import (
     SCREEN_DEST,
     SCREEN_DRAFT,
     SCREEN_HUBS,
+    SCREEN_OPTIONS,
     SCREEN_TRIP,
     Button,
     Rows,
@@ -49,7 +51,7 @@ from handlers.search.draft import (
 )
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only, owner_only_callback
 from handlers.utils import ValidationError, parse_positive_int
-from providers.base import ProviderError, SupportsCalendar
+from providers.base import ProviderError, SupportsCalendar, capabilities_of
 from providers.registry import primary_provider
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,8 @@ async def _show(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             results=context.user_data.get(_RESULTS, []),
             term=context.user_data.get(_TERM, ""),
         )
+    elif draft.screen == SCREEN_OPTIONS:
+        text, rows = options_mod.render(draft, capabilities_of(primary_provider()))
     elif draft.screen == SCREEN_TRIP:
         text, rows = _trip_screen()
     else:
@@ -218,7 +222,7 @@ async def edit_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     field = query.data.split(":", 1)[1]
 
     screens = {"dest": SCREEN_DEST, "trip": SCREEN_TRIP,
-               "dates": SCREEN_DATES, "hubs": SCREEN_HUBS}
+               "dates": SCREEN_DATES, "hubs": SCREEN_HUBS, "opts": SCREEN_OPTIONS}
     awaiting = {"dest": AWAIT_DEST, "hubs": AWAIT_HUBS}
 
     draft = _draft_of(context).with_(screen=screens[field],
@@ -521,6 +525,23 @@ async def go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 @owner_only_callback
+async def option_tap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """One tap on the options screen. A refused tap alerts and changes nothing."""
+    query = update.callback_query
+    if query.data == "o:n":
+        await query.answer()
+        return BUILDING
+    result = options_mod.apply(_draft_of(context), query.data,
+                               capabilities_of(primary_provider()))
+    if isinstance(result, str):
+        await query.answer(result, show_alert=True)
+        return BUILDING
+    await query.answer()
+    _store(context, result)
+    return await _show(update, context)
+
+
+@owner_only_callback
 async def noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """A padding or header cell. Telegram needs an answer or it spins."""
     await update.callback_query.answer()
@@ -572,6 +593,7 @@ def build_search_conversation() -> ConversationHandler:
                 CallbackQueryHandler(back, pattern="^back$"),
                 CallbackQueryHandler(reset, pattern="^reset$"),
                 CallbackQueryHandler(go, pattern="^go$"),
+                CallbackQueryHandler(option_tap, pattern=r"^o:"),
                 CallbackQueryHandler(to_menu, pattern="^menu_main$"),
                 # NOOP is imported from dates.py rather than hardcoded here so
                 # the padding-cell callback data and this router pattern can

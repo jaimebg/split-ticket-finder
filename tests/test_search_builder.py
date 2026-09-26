@@ -688,3 +688,43 @@ async def test_load_ratings_failure_does_not_poison_the_cache(monkeypatch):
 
     assert context.user_data[builder._RATINGS][key] == {_FUTURE_RATED_DAY: "CHEAP"}
     assert len(provider.calls) == 2, "the second visit must hit the provider again"
+
+
+async def test_an_options_tap_edits_the_draft_and_redraws(monkeypatch):
+    from providers.base import ALL_CABINS, Capabilities
+
+    class Kiwi:
+        name = "kiwi"
+        capabilities = Capabilities(cabins=frozenset(ALL_CABINS), children=True,
+                                    min_layover=True)
+
+    monkeypatch.setattr(builder, "primary_provider", lambda: Kiwi())
+    context = _context()
+    _set_draft(context, _draft(screen=builder.SCREEN_OPTIONS))
+    update = _cb_update("o:c:BUSINESS")
+
+    await builder.option_tap(update, context)
+
+    assert context.user_data[builder._DRAFT].cabin == "BUSINESS"
+    assert context.bot.edits or context.bot.sends
+
+
+async def test_a_refused_options_tap_alerts_and_keeps_the_draft(monkeypatch):
+    from providers.base import Capabilities
+
+    class GoogleLike:
+        name = "google"
+        capabilities = Capabilities(cabins=frozenset({"ECONOMY"}), children=False,
+                                    min_layover=False)
+
+    monkeypatch.setattr(builder, "primary_provider", lambda: GoogleLike())
+    context = _context()
+    draft = _draft(screen=builder.SCREEN_OPTIONS)
+    _set_draft(context, draft)
+    update = _cb_update("o:c:BUSINESS")
+
+    await builder.option_tap(update, context)
+
+    assert context.user_data[builder._DRAFT] == draft
+    assert update.callback_query.answers == [
+        ("Your flight source can't search Business class.", True)]

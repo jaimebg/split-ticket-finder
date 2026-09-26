@@ -23,6 +23,7 @@ from typing import NamedTuple
 
 from handlers.utils import esc
 from models import SearchWindow
+from providers.base import SearchOptions
 
 # ── Screens ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ SCREEN_DEST = "dest"
 SCREEN_HUBS = "hubs"
 SCREEN_DATES = "dates"
 SCREEN_TRIP = "trip"
+SCREEN_OPTIONS = "options"
 
 # ── Date modes (spec §6.4) ───────────────────────────────────────────────────
 
@@ -85,6 +87,10 @@ class SearchDraft:
     picked_days: tuple[str, ...] = ()
     adults: int = 1
     currency: str = "EUR"
+    children: int = 0
+    cabin: str = "ECONOMY"
+    max_stops: int | None = None
+    min_layover: int | None = None
     screen: str = SCREEN_DRAFT
     awaiting: str | None = None
 
@@ -126,6 +132,12 @@ class SearchDraft:
         return SearchWindow(start=self.window_start, end=self.window_end).dates()
 
     @property
+    def options(self) -> SearchOptions:
+        return SearchOptions(adults=self.adults, children=self.children, cabin=self.cabin,
+                             currency=self.currency, max_stops=self.max_stops,
+                             min_layover=self.min_layover)
+
+    @property
     def missing(self) -> tuple[str, ...]:
         """Human labels for the fields still blocking a search."""
         gaps = []
@@ -157,8 +169,7 @@ class SearchDraft:
             "destinations": dict(self.destinations),
             "dates": self.effective_dates,
             "hubs": dict(self.hubs),
-            "adults": self.adults,
-            "currency": self.currency,
+            **self.options.as_columns(),
             "trip_days": self.trip_days or 0,
         }
 
@@ -189,6 +200,15 @@ class SearchDraft:
         extra = len(codes) - _HUBS_SHOWN
         return f"{shown} +{extra}" if extra > 0 else shown
 
+    def _options_line(self) -> str:
+        parts = [self.options.party_label(), self.currency]
+        if self.max_stops is not None:
+            parts.append("direct" if self.max_stops == 0
+                         else f"≤{self.max_stops} stop{'s' if self.max_stops > 1 else ''}")
+        if self.min_layover is not None:
+            parts.append(f"layover ≥{self.min_layover // 60}h")
+        return " · ".join(parts)
+
     def render(self, estimate: int | None = None) -> tuple[str, Rows]:
         """The draft panel: (Telegram HTML, button rows).
 
@@ -204,8 +224,7 @@ class SearchDraft:
             f"<b>Dates</b>  {self._dates_line()}",
             f"<b>Hubs</b>   {self._places_line(self.hubs)}",
             "",
-            f"<i>{self.adults} adult{'s' if self.adults != 1 else ''} "
-            f"· Economy · {esc(self.currency)}</i>",
+            f"<b>Options</b> {esc(self._options_line())}",
         ]
 
         if self.missing:
@@ -216,6 +235,7 @@ class SearchDraft:
         rows: Rows = [
             [Button("✏️ To", "edit:dest"), Button("✏️ Trip", "edit:trip")],
             [Button("✏️ Dates", "edit:dates"), Button("✏️ Hubs", "edit:hubs")],
+            [Button("✏️ Options", "edit:opts")],
             [Button("🔍 Search", "go"), Button("♻️ Reset", "reset")],
             [Button("⬅️ Menu", "menu_main")],
         ]
