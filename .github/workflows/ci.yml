@@ -33,3 +33,27 @@ jobs:
         # The suite is fully offline: the parser is pinned against a stored
         # response fixture and the scraper is stubbed, so CI never hits Google.
         run: pytest
+
+  deploy:
+    # A push to main that passes every test deploys itself. Pull requests and
+    # other branches never reach the server.
+    name: deploy
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # One deployment at a time; a queued run waits rather than racing.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Trigger the deployment on the server
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -t ed25519 "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          # The key is pinned to a forced command on the server, so the
+          # argument below is ignored: it can only start this bot's updater.
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o ConnectTimeout=30 \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" deploy

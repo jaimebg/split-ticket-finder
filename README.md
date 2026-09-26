@@ -259,7 +259,7 @@ handlers/
   favorites.py          track / list / untrack routes
   history.py            view and re-run past searches
   utils.py              validation, HTML escaping, message chunking
-deploy/                 systemd units and the pull-based updater
+deploy/                 systemd units and the updater that push-to-deploy triggers
 tests/                  the full suite runs offline; a network-marked drift guard runs separately
 ```
 
@@ -318,8 +318,8 @@ introspects the live schema and fails if a field the client reads has moved.
 
 ## Deployment
 
-The bot runs as a systemd service under an unprivileged account, and updates
-itself from the deployment branch when you tell it to.
+The bot runs as a systemd service under an unprivileged account. Every push to
+`main` that passes CI deploys itself.
 
 ### First install
 
@@ -348,21 +348,12 @@ writable exception for `/opt/split-ticket-finder` — where `flight_finder.db`
 ### Updating a running deployment
 
 `deploy/update.sh` moves the server from the version it is running to the tip
-of the deployment branch. You run it when you want the update; nothing deploys
-on its own.
-
-Install it once, alongside the unit above:
+of the deployment branch. It runs as a oneshot unit; install it once, alongside
+the unit above:
 
 ```bash
 sudo cp deploy/split-ticket-finder-update.service /etc/systemd/system/
 sudo systemctl daemon-reload
-```
-
-Then deploy whenever you like:
-
-```bash
-sudo systemctl start split-ticket-finder-update.service   # deploy now
-journalctl -u split-ticket-finder-update -n 20            # what it did
 ```
 
 Each run fetches the branch and stops there unless there is something to do.
@@ -376,30 +367,38 @@ locally all leave the running version alone rather than guessing. A run that
 finds nothing new prints nothing at all, so the journal only ever contains real
 deployments.
 
-Because the server pulls, it never accepts an inbound connection for
-deployment and GitHub holds no credentials for it.
-
-#### Making it automatic
-
-A timer ships alongside the service and is **not enabled**. Enabling it turns
-the manual step above into a check every five minutes:
-
 ```bash
-sudo cp deploy/split-ticket-finder-update.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now split-ticket-finder-update.timer
-
-systemctl list-timers split-ticket-finder-update.timer          # when it next runs
-sudo systemctl disable --now split-ticket-finder-update.timer   # back to manual
+sudo systemctl start split-ticket-finder-update.service   # deploy by hand
+journalctl -u split-ticket-finder-update -n 20            # what it did
 ```
 
-Change the interval by editing `OnUnitActiveSec` in the timer file. Nothing
-else differs: the timer runs exactly the same service, with the same safety
-rules.
+#### Deploying on push
+
+The `deploy` job in [`ci.yml`](.github/workflows/ci.yml) runs after every test
+job passes on a push to `main`, and SSHes into the server to start the unit
+above. It holds no power beyond that: the key it uses is pinned on the server to
+a single forced command, and sudo lets that account start this one unit and
+nothing else.
+
+```bash
+# On the server, once. `ghdeploy` is a dedicated account with no other use.
+echo 'command="sudo /usr/bin/systemctl start split-ticket-finder-update.service",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA… split-ticket-finder deploy' \
+  | sudo tee -a /home/ghdeploy/.ssh/authorized_keys
+echo 'ghdeploy ALL=(root) NOPASSWD: /usr/bin/systemctl start split-ticket-finder-update.service' \
+  | sudo tee -a /etc/sudoers.d/ghdeploy
+```
+
+The repository needs three secrets: `DEPLOY_SSH_KEY` (the private half of that
+key), `DEPLOY_HOST` and `DEPLOY_USER`.
+
+The updater still checks CI itself, skipping only the `deploy` check run that
+is running it (`DEPLOY_CHECK`). So two quick pushes cannot ship an untested
+commit: if the branch tip has moved on to a commit whose tests are still
+running, the earlier deploy leaves the server alone and the later one ships it.
 
 #### Configuration
 
-Tune either mode with a drop-in (`sudo systemctl edit
+Tune the updater with a drop-in (`sudo systemctl edit
 split-ticket-finder-update.service`):
 
 | Variable | Meaning | Default |
@@ -410,6 +409,7 @@ split-ticket-finder-update.service`):
 | `RUN_AS` | Account owning the checkout | `stfbot` |
 | `API_REPO` | `owner/name` used for the CI lookup | `jaimebg/split-ticket-finder` |
 | `REQUIRE_GREEN_CI` | Set to `0` to deploy without consulting CI | `1` |
+| `DEPLOY_CHECK` | Name of the CI job that triggers the updater, skipped by the CI check | `deploy` |
 
 The updater runs as root so it can restart the unit, and drops to `RUN_AS` for
 every write to the checkout — git refuses to work in a repository owned by
