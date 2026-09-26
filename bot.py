@@ -9,6 +9,7 @@ Handler registration order matters (first-match routing):
 """
 
 import asyncio
+import contextlib
 import logging
 import sys
 
@@ -45,8 +46,18 @@ async def post_init(application: Application) -> None:
 
 
 async def post_shutdown(application: Application) -> None:
-    """Release provider connection pools on the way out."""
+    """Stop the scheduler and release provider connection pools on the way out."""
     from providers.registry import close_all
+
+    task = application.bot_data.get("scheduler_task")
+    if task is not None:
+        # Cancelled and awaited, so shutdown never leaves it pending: that
+        # is what logged "Task was destroyed but it is pending!" on every
+        # restart.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        logger.info("Scheduler stopped.")
 
     await close_all()
     logger.info("Provider connections closed.")
