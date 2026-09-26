@@ -149,7 +149,7 @@ async def history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @owner_only_callback
 async def history_rerun(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Rerun a past search with the same parameters."""
-    from handlers.search_flow import run_and_report
+    from handlers.results import run_and_report
 
     query = update.callback_query
     await query.answer()

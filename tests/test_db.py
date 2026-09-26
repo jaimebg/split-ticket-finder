@@ -321,7 +321,7 @@ async def test_add_favorite_defaults_query_shape_columns(temp_db):
 
 
 async def test_save_search_old_call_shape_still_works(temp_db):
-    """Exactly the call shape handlers/search_flow.py uses today."""
+    """Exactly the call shape handlers/results.py uses today."""
     search_id = await save_search(
         origin="LPA",
         destinations=["JFK"],

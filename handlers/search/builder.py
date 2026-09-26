@@ -27,6 +27,7 @@ from telegram.ext import (
 )
 
 from config import ELIGIBLE_ORIGINS, ORIGIN
+from handlers.results import _estimate_queries, run_and_report
 from handlers.search import dates as dates_mod
 from handlers.search import hubs as hubs_mod
 from handlers.search import places as places_mod
@@ -45,7 +46,6 @@ from handlers.search.draft import (
     Rows,
     SearchDraft,
 )
-from handlers.search_flow import _estimate_queries, run_and_report
 from handlers.start import MAIN_MENU_KEYBOARD, owner_only, owner_only_callback
 from handlers.utils import ValidationError, parse_positive_int
 from providers.base import ProviderError, SupportsCalendar

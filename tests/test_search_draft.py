@@ -4,7 +4,7 @@ SearchDraft holds every field *and* which sub-screen is showing, which is
 what lets ConversationHandler keep a single state and makes Back a
 re-render rather than a transition. This module imports no telegram, so
 none of these tests need Update/Context scaffolding -- the same reason
-tests/test_search_flow.py tests run_and_report and not the handlers.
+tests/test_results_run.py tests run_and_report and not the handlers.
 """
 from __future__ import annotations
 

@@ -13,7 +13,7 @@ Two things live here that no other module can cover:
   path, and ``_load_ratings``'s cache key. These fail silently on a wrong
   mapping or a swallowed exception, so a review found them under-tested;
   a fake Update/context (``SimpleNamespace``, following
-  ``tests/test_search_flow.py``'s "fake the bot, not the Telegram
+  ``tests/test_results_run.py``'s "fake the bot, not the Telegram
   scaffolding" approach) stands in for real PTB objects.
 
 Every other rule worth testing on its own lives in draft.py, dates.py,
@@ -158,7 +158,7 @@ async def test_rows_become_a_real_inline_keyboard():
 # These handlers are plain async functions wrapped in @owner_only_callback /
 # @owner_only, so a SimpleNamespace standing in for Update/context is enough
 # -- no real telegram.Update/CallbackContext is built, matching
-# tests/test_search_flow.py's "fake the bot, not the scaffolding" approach.
+# tests/test_results_run.py's "fake the bot, not the scaffolding" approach.
 
 
 @pytest.fixture(autouse=True)

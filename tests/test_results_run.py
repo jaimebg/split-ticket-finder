@@ -4,7 +4,7 @@
 Layer 2's review found the branch's own invariants stop being enforced: the
 discrete date list the user actually asked for gets silently widened into a
 window (C1), and error counters are collected and thrown away (C2). These
-tests fake ``engine.run_search`` (imported into ``handlers.search_flow``'s
+tests fake ``engine.run_search`` (imported into ``handlers.results``'s
 own namespace) and a Telegram bot, the same "fake the engine call, not the
 provider layer" approach ``tests/test_scheduler.py`` uses for
 ``check_favorites`` -- ``run_and_report`` is a plain async function, not a
@@ -23,9 +23,9 @@ from types import SimpleNamespace
 import pytest
 
 import db as db_module
-import handlers.search_flow as search_flow_module
+import handlers.results as results_module
 from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
-from handlers.search_flow import _oversized_window_message, run_and_report
+from handlers.results import _oversized_window_message, run_and_report
 from models import Itinerary
 from providers.base import Offer
 
@@ -83,7 +83,7 @@ def _itin(*, date, hub="MAD", dest="NRT", return_date="",
 
 @pytest.fixture
 def fake_engine(monkeypatch):
-    """Replace handlers.search_flow.run_search with a scripted fake."""
+    """Replace handlers.results.run_search with a scripted fake."""
     calls: list[dict] = []
     state = {"itineraries": [], "parse_errors": 0, "fetch_errors": 0, "scan": None}
 
@@ -96,7 +96,7 @@ def fake_engine(monkeypatch):
             scan=state["scan"],
         )
 
-    monkeypatch.setattr(search_flow_module, "run_search", fake_run_search)
+    monkeypatch.setattr(results_module, "run_search", fake_run_search)
     return {"calls": calls, "state": state}
 
 
@@ -263,10 +263,10 @@ async def test_a_clean_search_with_no_errors_says_nothing_extra(temp_db, fake_en
 
 def test_estimate_queries_two_stage_matches_the_documented_formula(monkeypatch):
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=12, round_trip=True)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=12, round_trip=True)
 
     phase0 = 8 * (1 + 3) * 2
     phase1 = SHORTLIST_SIZE * 4
@@ -281,10 +281,10 @@ def test_estimate_queries_two_stage_is_close_to_the_real_measured_count(monkeypa
     claim. The new estimate must land within a small margin of the real
     figure, not the old grid-shaped one."""
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=14, round_trip=True)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=14, round_trip=True)
 
     assert n < 250          # nowhere near the old formula's 768
     assert abs(n - 190) < 50  # in the neighbourhood of the real measured count
@@ -292,10 +292,10 @@ def test_estimate_queries_two_stage_is_close_to_the_real_measured_count(monkeypa
 
 def test_estimate_queries_grid_uses_the_sampled_date_count_not_the_raw_one(monkeypatch):
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=50, round_trip=False)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=50, round_trip=False)
 
     assert n == 8 * FALLBACK_MAX_DATES * (1 + 3)
 
@@ -304,10 +304,10 @@ def test_estimate_queries_grid_matches_the_old_formula_when_dates_fit_under_the_
     monkeypatch,
 ):
     monkeypatch.setattr(
-        search_flow_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
+        results_module, "primary_provider", lambda: _FakeNoCalendarProvider(),
     )
 
-    n = search_flow_module._estimate_queries(hubs=8, dests=3, dates=5, round_trip=True)
+    n = results_module._estimate_queries(hubs=8, dests=3, dates=5, round_trip=True)
 
     assert n == 8 * 5 * (1 + 3) * 2
 
@@ -349,7 +349,7 @@ async def test_run_and_report_surfaces_a_valueerrors_message_instead_of_the_gene
     async def raising_run_search(**kwargs):
         raise ValueError(human_message)
 
-    monkeypatch.setattr(search_flow_module, "run_search", raising_run_search)
+    monkeypatch.setattr(results_module, "run_search", raising_run_search)
     bot = FakeBot()
     params = _base_params(dates=["2026-01-01", "2026-06-01"])
 
@@ -368,7 +368,7 @@ async def test_run_and_report_still_uses_the_generic_message_for_other_exception
     async def raising_run_search(**kwargs):
         raise RuntimeError("provider is down")
 
-    monkeypatch.setattr(search_flow_module, "run_search", raising_run_search)
+    monkeypatch.setattr(results_module, "run_search", raising_run_search)
     bot = FakeBot()
     params = _base_params()
 
