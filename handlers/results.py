@@ -12,22 +12,39 @@ import, or the patches silently stop taking effect.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
+import secrets
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
+from telegram.error import TelegramError
+from telegram.ext import ContextTypes
 
 from config import FALLBACK_MAX_DATES, MAX_WINDOW_DAYS, SHORTLIST_SIZE, THROUGH_FARE_DATES
-from db import save_search
+from db import get_search_by_id, save_search
 from engine import run_search
-from handlers.utils import esc, split_message
-from models import SearchWindow
+from engine.orchestrator import STRATEGY_GRID, STRATEGY_TWO_STAGE
+from handlers.anchor import render_anchor
+from handlers.search.draft import Button, Rows
+from handlers.start import owner_only_callback
+from handlers.utils import esc
+from models import CancelToken, Progress, SearchCancelled, SearchWindow
 from providers.base import SupportsCalendar
 from providers.registry import primary_provider
-from results import store
-from search import format_results, scan_to_json
+from results import store, view
+from results.filters import Filters
+from search import scan_to_json
 
 logger = logging.getLogger(__name__)
+
+# The running searches' cancel tokens, in Application.bot_data under this key.
+# Memory is the right place: a search in flight cannot survive a restart.
+RUNS_KEY = "runs"
+
+# Spec §6.6: at most one progress edit per this many seconds.
+PROGRESS_INTERVAL = 3.0
 
 
 def _oversized_window_message(start: str, end: str) -> str | None:
@@ -93,31 +110,100 @@ def _estimate_queries(*, hubs: int, dests: int, dates: int, round_trip: bool) ->
     return n_queries * 2 if round_trip else n_queries
 
 
-# ── Background search task ───────────────────────────────────────────────────
+def _expected_strategy() -> str:
+    """The strategy run_search will pick, by the same capability check."""
+    if isinstance(primary_provider(), SupportsCalendar):
+        return STRATEGY_TWO_STAGE
+    return STRATEGY_GRID
 
-async def run_and_report(bot, chat_id: int, params: dict) -> None:
-    """Run a search, send the results, persist them, and offer to track them.
 
-    Shared by the guided flow and by history reruns so both paths store the same
-    fields — notably ``trip_days``, without which a rerun would silently change
-    the trip shape. ``params["dates"]`` is the discrete date list the guided
-    flow (or a history rerun) collected; the engine wants a contiguous
-    ``SearchWindow``, so it is converted here, once, rather than pushed onto
-    every caller.
+class ProgressMessage:
+    """The live progress display: one message, at most one edit per interval.
 
-    ``dates`` is also forwarded to ``run_search`` itself (as ``dates=``) and
-    used again here to filter the returned itineraries down to
-    ``date in set(dates)`` (review finding C1): the two-stage strategy prices
-    every day of the window "for free", and the grid fallback resamples its
-    own dates from the window when it isn't told otherwise -- neither of
-    those is the same thing as "the exact dates the user asked for", and a
-    result on a date nobody requested must never reach display or storage,
-    just as a date the user did explicitly ask for must never be silently
-    dropped.
+    The engine's progress callback is synchronous and fires on every leg, so
+    ``tick`` only records the latest value. A background loop sleeps for the
+    interval, then renders whatever is latest, and skips the edit when the
+    text has not changed (Telegram rejects an identical edit). Progress is
+    cosmetic: a failed edit is logged and never reaches the search.
+    """
+
+    def __init__(self, bot, chat_id: int, message_id: int | None, *, strategy: str,
+                 currency: str, cancel_data: str, sleep=asyncio.sleep):
+        self._bot = bot
+        self._chat_id = chat_id
+        self.message_id = message_id
+        self._strategy = strategy
+        self._currency = currency
+        self._rows: Rows = [[Button("✖ Cancel", cancel_data)]]
+        self._sleep = sleep
+        self._latest: Progress | None = None
+        self._shown: str | None = None
+        self._task: asyncio.Task | None = None
+
+    def tick(self, progress: Progress) -> None:
+        self._latest = progress
+
+    async def flush(self) -> None:
+        """Render the latest tick. Never raises: a failed edit is retried by
+        the next flush, since ``_shown`` only moves on success."""
+        text = view.progress_text(self._latest, self._strategy, self._currency)
+        if text == self._shown:
+            return
+        try:
+            self.message_id = await render_anchor(self._bot, self._chat_id,
+                                                  self.message_id, text, self._rows)
+        except TelegramError as exc:
+            logger.info("Progress edit failed (%s); the search continues.", exc)
+            return
+        self._shown = text
+
+    async def _loop(self, interval: float) -> None:
+        while True:
+            await self._sleep(interval)
+            await self.flush()
+
+    def start(self, interval: float) -> None:
+        self._task = asyncio.create_task(self._loop(interval))
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+
+
+async def run_and_report(bot, chat_id: int, params: dict, *, message_id: int | None = None,
+                         runs: dict[str, CancelToken] | None = None,
+                         interval: float = PROGRESS_INTERVAL) -> None:
+    """Run a search in one live message: progress, then its results.
+
+    *message_id* is the message to take over: the builder's anchor. None
+    sends a fresh one, as history reruns do. *runs* is the registry the
+    Cancel button looks tokens up in.
+
+    Shared by the builder and history reruns, so both store the same fields,
+    notably ``trip_days``, without which a rerun would silently change the
+    trip shape. ``params["dates"]`` is the discrete list the user asked for:
+    it is forwarded to ``run_search`` and also used to filter the returned
+    itineraries (review finding C1). A result on a date nobody asked for
+    must never be shown or stored, and a date the user did ask for must
+    never be dropped.
     """
     dates = params["dates"]
     window = SearchWindow(start=min(dates), end=max(dates))
+    currency = params["currency"]
 
+    run_id = secrets.token_hex(4)
+    cancel = CancelToken()
+    if runs is not None:
+        runs[run_id] = cancel
+
+    progress = ProgressMessage(bot, chat_id, message_id, strategy=_expected_strategy(),
+                               currency=currency, cancel_data=f"x:{run_id}")
+    await progress.flush()
+    progress.start(interval)
+
+    failure: str | None = None
     try:
         result = await run_search(
             origin=params["origin"],
@@ -126,89 +212,42 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
             window=window,
             trip_days=params.get("trip_days", 0),
             adults=params["adults"],
-            currency=params["currency"],
+            currency=currency,
             dates=dates,
+            cancel=cancel,
+            on_progress=progress.tick,
         )
+    except SearchCancelled:
+        failure = "Search cancelled."
     except ValueError as exc:
-        # A guided-flow date span is validated before this point (see
-        # _oversized_window_message), but a history rerun of a search saved
-        # before that validation existed can still reach run_search with an
-        # oversized window. run_search's own ValueError message is already
-        # written for a human (review finding I6) -- show it verbatim rather
-        # than the generic "check the logs" message below, which would send
-        # someone hunting for a bug that isn't there.
+        # run_search's ValueError (an oversized window on a history rerun) is
+        # written for a human, so it is shown verbatim (review finding I6).
         logger.warning("Search rejected for %s: %s", params, exc)
-        await bot.send_message(chat_id=chat_id, text=f"Search failed: {esc(exc)}")
-        return
+        failure = f"Search failed: {esc(exc)}"
     except Exception:
         logger.exception("Search failed for %s", params)
-        await bot.send_message(
-            chat_id=chat_id,
-            text="Search failed — check the bot logs for details.",
-        )
+        failure = "Search failed — check the bot logs for details."
+    finally:
+        await progress.stop()
+        if runs is not None:
+            runs.pop(run_id, None)
+
+    if failure is not None:
+        await render_anchor(bot, chat_id, progress.message_id, failure, view.MENU_ROWS)
         return
 
     requested_dates = set(dates)
     itineraries = [itin for itin in result.itineraries if itin.date in requested_dates]
-    origin = params["origin"]
-    currency = params["currency"]
     had_errors = bool(result.parse_errors or result.fetch_errors)
-
-    # Empty and broken must never look alike (this project's central rule,
-    # and the reason C2 was Critical). A provider that failed on every
-    # request also returns an empty itinerary list; showing the same bold
-    # "<b>No routes found.</b>" headline a genuinely empty search gets --
-    # even with a corrective note in italics underneath -- states a false
-    # fact first, in the part a skimming Telegram user actually reads, with
-    # the correction relegated to fine print. That is the same
-    # broken-looks-like-empty failure C2 exists to prevent, only softened.
-    # A total failure (no itineraries at all) therefore gets its own
-    # message instead of format_results ever running. A *partial* result
-    # (some itineraries survived, alongside some errors) is genuinely
-    # different -- there are real results to show, so they are shown, with
-    # the note appended below them, where "the results above" is accurate.
-    if not itineraries and had_errors:
+    if had_errors:
         logger.warning(
-            "Search completed with %d parse failures and %d fetch failures "
-            "for %s — no results could be confirmed.",
+            "Search completed with %d parse failures and %d fetch failures for %s.",
             result.parse_errors, result.fetch_errors, params,
         )
-        report_text = (
-            "<b>Search incomplete</b> — "
-            f"{result.parse_errors + result.fetch_errors} request(s) failed, "
-            "so no results could be confirmed."
-        )
-    else:
-        incomplete_notice = ""
-        if had_errors:
-            logger.warning(
-                "Search completed with %d parse failures and %d fetch failures "
-                "for %s — results may be incomplete.",
-                result.parse_errors, result.fetch_errors, params,
-            )
-            incomplete_notice = (
-                "\n\n<i>Note: "
-                f"{result.parse_errors} parse and {result.fetch_errors} fetch "
-                "request(s) failed during this search — treat the results "
-                "above as incomplete, not a confirmed count.</i>"
-            )
-        report_text = format_results(itineraries, origin, currency) + incomplete_notice
 
-    for chunk in split_message(report_text):
-        await bot.send_message(
-            chat_id=chat_id,
-            text=chunk,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
-
-    results_data = store.serialize(itineraries) if itineraries else None
-    # scan_to_json(None) is the JSON literal "null" -> json.loads gives None,
-    # so this is safe for both strategies without branching on result.scan here.
-    scan_data = json.loads(scan_to_json(result.scan))
-    best = itineraries[0] if itineraries else None
+    best = min(itineraries, key=lambda it: it.total) if itineraries else None
     search_id = await save_search(
-        origin=origin,
+        origin=params["origin"],
         destinations=list(params["destinations"]),
         dates=dates,
         hubs=list(params["hubs"]),
@@ -219,27 +258,46 @@ async def run_and_report(bot, chat_id: int, params: dict) -> None:
         window_end=window.end,
         provider=best.providers[0] if best and best.providers else None,
         best_price=float(best.total) if best else None,
-        best_route=f"{origin}->{best.hub}->{best.dest} {best.date}" if best else None,
+        best_route=(f"{params['origin']}->{best.hub}->{best.dest} {best.date}"
+                    if best else None),
         through_fare=best.through_fare if best else None,
-        results=results_data,
-        scan_json=scan_data,
+        results=store.serialize(itineraries) if itineraries else None,
+        scan_json=json.loads(scan_to_json(result.scan)),
         strategy=result.strategy,
     )
 
-    if not best:
+    # Empty and broken must never look alike (review finding C2). A provider
+    # that failed on every request also returns no itineraries; that gets its
+    # own message, never the "No routes found" a genuinely empty search gets.
+    if not itineraries:
+        text = (
+            "<b>Search incomplete</b> — "
+            f"{result.parse_errors + result.fetch_errors} request(s) failed, "
+            "so no results could be confirmed."
+            if had_errors else "<b>No routes found.</b>"
+        )
+        await render_anchor(bot, chat_id, progress.message_id, text, view.MENU_ROWS)
         return
 
-    # The button carries only the search id; the handler reads price and trip
-    # shape back from the stored row.
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Track this route", callback_data=f"savefav_{search_id}")],
-    ])
-    await bot.send_message(
-        chat_id=chat_id,
-        text=(
-            f"Best route: <b>{best.total:,.2f} {currency}</b> "
-            f"via {esc(best.hub)} to {esc(best.dest)} on {best.date}"
-        ),
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
+    row = await get_search_by_id(search_id)
+    text, rows = view.summary(view.SearchMeta.from_row(row), store.load(row["results"]),
+                              Filters(), 1)
+    if had_errors:
+        text += (
+            "\n\n<i>Note: "
+            f"{result.parse_errors} parse and {result.fetch_errors} fetch "
+            "request(s) failed during this search — treat these results as "
+            "incomplete, not a confirmed count.</i>"
+        )
+    await render_anchor(bot, chat_id, progress.message_id, text, rows)
+
+
+@owner_only_callback
+async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    token = context.application.bot_data.get(RUNS_KEY, {}).get(query.data[2:])
+    if token is None:
+        await query.answer("That search is no longer running.", show_alert=True)
+        return
+    token.cancel()
+    await query.answer("Cancelling…")

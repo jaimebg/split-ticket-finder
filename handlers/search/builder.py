@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import date as date_cls
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
@@ -27,7 +27,8 @@ from telegram.ext import (
 )
 
 from config import ELIGIBLE_ORIGINS, ORIGIN
-from handlers.results import _estimate_queries, run_and_report
+from handlers.anchor import render_anchor
+from handlers.results import RUNS_KEY, _estimate_queries, run_and_report
 from handlers.search import dates as dates_mod
 from handlers.search import hubs as hubs_mod
 from handlers.search import places as places_mod
@@ -72,50 +73,6 @@ _TRIP_PRESETS = (7, 10, 14, 21)
 
 
 # ── The anchor ───────────────────────────────────────────────────────────────
-
-def _markup(rows: Rows) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(b.label, callback_data=b.data) for b in row]
-         for row in rows]
-    )
-
-
-async def render_anchor(bot, chat_id: int, message_id: int | None,
-                        text: str, rows: Rows) -> int:
-    """Show *text* in the anchor, returning the live message id.
-
-    The returned id differs from *message_id* when a resend was needed.
-    Callers must store it back, or every later edit targets a message that
-    is no longer there.
-
-    An identical edit is not an error: Telegram rejects it with
-    "Message is not modified", which is a no-op, not a failure -- the same
-    case §6.6 calls out for the progress message. Any other edit failure
-    means the panel is unusable, so it is resent.
-    """
-    markup = _markup(rows)
-
-    if message_id is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id, message_id=message_id, text=text,
-                parse_mode="HTML", reply_markup=markup,
-                disable_web_page_preview=True,
-            )
-            return message_id
-        except BadRequest as exc:
-            if "not modified" in str(exc).lower():
-                return message_id
-            logger.info("Anchor %s unusable (%s) — resending.", message_id, exc)
-        except Forbidden as exc:
-            logger.info("Anchor %s forbidden (%s) — resending.", message_id, exc)
-
-    message = await bot.send_message(
-        chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=markup,
-        disable_web_page_preview=True,
-    )
-    return message.message_id
-
 
 def _draft_of(context) -> SearchDraft:
     return context.user_data[_DRAFT]
@@ -552,20 +509,11 @@ async def go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return BUILDING
 
     await query.answer()
-    try:
-        await query.edit_message_text("On it — I'll message you when it's done.")
-    except (BadRequest, Forbidden) as exc:
-        # Every other render on this branch goes through render_anchor, which
-        # absorbs exactly these and resends. This edit has no keyboard to
-        # rebuild, so a bare log line is enough -- but it must not stop the
-        # search from being scheduled below. query.answer() has already
-        # fired, so a swallowed exception here is the only thing standing
-        # between "spinner stops" and "the search actually runs."
-        logger.info("Could not edit the anchor before launching the search (%s).", exc)
-
+    # The anchor becomes the search's live message: progress, then results.
     context.application.create_task(
         run_and_report(context.application.bot, update.effective_chat.id,
-                       draft.to_params()),
+                       draft.to_params(), message_id=context.user_data.get(_ANCHOR),
+                       runs=context.application.bot_data.setdefault(RUNS_KEY, {})),
         update=update,
     )
     context.user_data.clear()
